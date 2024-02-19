@@ -1,0 +1,49 @@
+---
+title: "baseballR Test MLB"
+author: "Alexander Harriman"
+date: "2024-02-19"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+```{r}
+library(baseballr)
+library(tidyverse)
+```
+
+
+# Read MLB Player IDs
+
+```{r}
+playerIDs <- read.csv('MLBPlayerIDs.csv')
+
+playerIDs
+```
+
+
+```{r}
+# Find Game PKs
+regularSeasonIDs <- mlb_schedule(season = 2023, level_ids = '1') |>
+  filter(game_type == 'R') |>
+  select(date, game_pk) |>
+  distinct()
+```
+
+```{r}
+# Get the PBP Data
+eovaldi <- statcast_search_pitchers(start_date = '2023-03-30', end_date = '2023-10-01', pitcherid = 543135)
+
+head(eovaldi)
+```
+
+# Pitch Usage
+
+```{r}
+
+```
+
