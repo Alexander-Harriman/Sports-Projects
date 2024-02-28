@@ -1,0 +1,140 @@
+---
+title: "Stuff+ Leaderboard"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    vertical_layout: fill
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(tidyverse)
+library(dplyr)
+library(readxl)
+library(gt)
+```
+
+```{r}
+dataCheck <- read.csv('20240228_postprocessed.csv')
+teams <- read_excel('team_conf_mapping.xlsx')
+colnames(teams) <- c('pitcherTeam', 'fullTeam', 'formalTeam', 'Conference', 'hitterTeam', 'fullHitterTeam', 'formalHitterTeam', 'HitterConference')
+cleanData <- inner_join(dataCheck, teams, by = 'pitcherTeam')
+```
+
+
+```{r}
+pitcherData <- cleanData |>
+  group_by(pitcher, fullTeam, Conference) |>
+  select(pitcher, fullTeam, Conference, Stuff., pitch_group) |>
+  summarise(n = length(pitcher),
+            fbs = sum(ifelse(pitch_group == 'Hard', 1, 0)),
+            breakCount = sum(ifelse(pitch_group == 'Breaking', 1, 0)),
+            offspeedCount = sum(ifelse(pitch_group == 'Soft', 1, 0)),
+            arsenalStuff = mean(Stuff., na.rm = TRUE),
+            fbStuff = mean(ifelse(pitch_group == 'Hard', Stuff., NA), na.rm = TRUE),
+            breakStuff = mean(ifelse(pitch_group == 'Breaking', Stuff., NA), na.rm = TRUE),
+            offspeedStuff = mean(ifelse(pitch_group == 'Soft', Stuff., NA), na.rm = TRUE)) |>
+  ungroup() |>
+  mutate(arsenalRank = round(100.0*rank(arsenalStuff, ties.method = 'random', na.last = FALSE) / length(arsenalStuff),0),
+         fbRank = round(100.0*rank(fbStuff, ties.method = 'random', na.last = FALSE) / length(fbStuff),0),
+         breakRank = round(100.0*rank(breakStuff, ties.method = 'random', na.last = FALSE) / length(breakStuff),0),
+         offspeedRank = round(100.0*rank(offspeedStuff, ties.method = 'random', na.last = FALSE) / length(offspeedStuff),0)) |>
+  mutate(arsenalStuff = round(arsenalStuff, 1),
+         fbStuff = round(fbStuff, 1),
+         breakStuff = round(breakStuff, 1),
+         offspeedStuff = round(offspeedStuff, 1))
+```
+
+
+```{r}
+teamTable <- cleanData |>
+  group_by(fullTeam, Conference) |>
+  select(fullTeam, Conference, Stuff., pitch_group) |>
+  summarise(n = length(fullTeam),
+            fbs = sum(ifelse(pitch_group == 'Hard', 1, 0)),
+            breakCount = sum(ifelse(pitch_group == 'Breaking', 1, 0)),
+            offspeedCount = sum(ifelse(pitch_group == 'Soft', 1, 0)),
+            arsenalStuff = mean(Stuff., na.rm = TRUE),
+            fbStuff = mean(ifelse(pitch_group == 'Hard', Stuff., NA), na.rm = TRUE),
+            breakStuff = mean(ifelse(pitch_group == 'Breaking', Stuff., NA), na.rm = TRUE),
+            offspeedStuff = mean(ifelse(pitch_group == 'Soft', Stuff., NA), na.rm = TRUE)) |>
+  ungroup() |>
+  mutate(arsenalRank = round(100.0*rank(arsenalStuff, ties.method = 'random', na.last = FALSE) / length(arsenalStuff),0),
+         fbRank = round(100.0*rank(fbStuff, ties.method = 'random', na.last = FALSE) / length(fbStuff),0),
+         breakRank = round(100.0*rank(breakStuff, ties.method = 'random', na.last = FALSE) / length(breakStuff),0),
+         offspeedRank = round(100.0*rank(offspeedStuff, ties.method = 'random', na.last = FALSE) / length(offspeedStuff),0)) |>
+  mutate(arsenalStuff = round(arsenalStuff, 1),
+         fbStuff = round(fbStuff, 1),
+         breakStuff = round(breakStuff, 1),
+         offspeedStuff = round(offspeedStuff, 1)) |>
+  distinct()
+```
+
+
+
+Individual Leaderboard
+====================================
+
+Pitcher Rankings {data-width=1000}
+-----------------------------------------------------------------------
+
+### Pitcher Rankings
+
+```{r}
+pitcherData |> 
+  arrange(desc(arsenalStuff)) |>
+  gt() |> 
+  tab_header(title = md('**2024 NCAA Pitcher Stuff+ Leaderboard**')) |> 
+  cols_align(align = 'center', columns = c('n', 'fbs', 'breakCount', 'offspeedCount', 
+                                           'arsenalStuff', 'fbStuff', 'breakStuff', 'offspeedStuff')) |>
+  cols_label(pitcher = 'Pitcher', fullTeam = 'Team', n = '# Pitches', fbs = 'FBs', 
+             breakCount = 'Breaking', offspeedCount = 'Slow', arsenalStuff = 'Arsenal Stuff+', 
+             fbStuff = 'FB Stuff+', breakStuff = 'Breaking Stuff+', offspeedStuff = 'Slow Stuff+') |>
+  opt_stylize(style = 5, color = "blue") |> 
+  opt_row_striping() |>
+  cols_width(pitcher ~ px(200), fullTeam ~ px(200), Conference ~ px(125), everything() ~ px(100)) |>
+  data_color(columns = c('arsenalRank', 'fbRank', 'breakRank', 'offspeedRank'),
+             target_columns = c('arsenalStuff', 'fbStuff', 'breakStuff', 'offspeedStuff'),
+             palette = c('#8B0000', '#FFFFFF', '#228B22'),
+             domain = c(0, 100)) |>
+  cols_hide(c('arsenalRank', 'fbRank', 'breakRank', 'offspeedRank')) |>
+  opt_interactive(use_search = TRUE,
+                  use_highlight = TRUE,
+                  use_filters = TRUE)
+```
+
+
+Team Leaderboard 
+==========================================
+
+Team Rankings {data-width=1000}
+----------------------------------------------
+
+### Team Rankings
+
+```{r}
+teamTable |> 
+  arrange(desc(arsenalStuff)) |>
+  gt() |> 
+  tab_header(title = md('**2024 NCAA Team Stuff+ Leaderboard**')) |> 
+  cols_align(align = 'center', columns = c('n', 'fbs', 'breakCount', 'offspeedCount', 
+                                           'arsenalStuff', 'fbStuff', 'breakStuff', 'offspeedStuff')) |>
+  cols_label(fullTeam = 'Team', n = '# Pitches', fbs = 'FBs', breakCount = 'Breaking', 
+             offspeedCount = 'Slow', arsenalStuff = 'Arsenal Stuff+', fbStuff = 'FB Stuff+', 
+             breakStuff = 'Breaking Stuff+', offspeedStuff = 'Slow Stuff+') |>
+  opt_stylize(style = 5, color = "blue") |> 
+  opt_row_striping() |>
+  cols_width(fullTeam ~ px(200), everything() ~ px(125)) |>
+  data_color(columns = c('arsenalRank', 'fbRank', 'breakRank', 'offspeedRank'),
+             target_columns = c('arsenalStuff', 'fbStuff', 'breakStuff', 'offspeedStuff'),
+             palette = c('#8B0000', '#FFFFFF', '#228B22'),
+             domain = c(0, 100)) |>
+  cols_hide(c('arsenalRank', 'fbRank', 'breakRank', 'offspeedRank')) |>
+  opt_interactive(use_search = TRUE,
+                  use_highlight = TRUE,
+                  use_filters = TRUE)
+```
+
+
+
+
