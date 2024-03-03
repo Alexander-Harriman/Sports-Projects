@@ -176,13 +176,11 @@ pitcherChangeL()
 accRightFour <- accRight[accRight$`Pitch Assignment` == "Right Four-Seam",]
 accRightTwo <- accRight[accRight$`Pitch Assignment` == "Right Two-Seam",]
 
-#Filter out bad pitchers
+#Filter out bad data
 accRightTwo <- accRightTwo[accRightTwo$Pitcher != "Maxwell, Zachary",]
 
 accRightFour <- accRightFour[is.na(accRightFour$Pitcher) == FALSE,]
 
-#Zachary Maxwell's two-seamers break the code due to their unorthodox measurables. As this is the only instance, we will assume these are incorrectly marked as two-seamers based on their Tilt, and omit him from this subset.
-##We have an NA in the four-seam dataset when ran normally, which breaks the code.
 
 dim(accRightFour)
 dim(accRightTwo)
@@ -199,10 +197,6 @@ dim(accLeftTwo)
 ```{r}
 # Set Pitch Minimum at 20 Pitches:
 
-##This code takes 6 runs
-###Make sure not to continue until the dimensions line up after running
-
-#### Then continue
 
 pitcherClearLF <- function(x){
   for(i in 1:length(unique(x$Pitcher))){
