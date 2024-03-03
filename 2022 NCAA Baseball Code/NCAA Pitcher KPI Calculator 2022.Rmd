@@ -1,0 +1,964 @@
+---
+title: "NCAA Pitcher Statistic Calculation 2022"
+author: "Alexander Harriman"
+date: "5/9/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This file takes all of the NCAA pitchers from games in the 2022 season **May 3rd Last Update** and calculates their percentiles needed for Stuff+, their Barrel% and their Whiff%. All of these will come from a combined Trackman file, compiled in Excel first.
+
+This will be used for validation purposes and for calculating the Stuff+ of all NCAA pitchers.
+
+
+
+# Insert ACC Pitcher Files
+
+```{r, warning = FALSE}
+library(readxl)
+library(plyr)
+pitchers2022 <- read_excel("Reduced 2022 Trackman (5-4).xlsx")
+newPitchers2022 <- read_excel("Combined 2022 Trackman (5-5 to 5-20).xlsx")
+total2022 <- rbind.fill(pitchers2022,newPitchers2022)
+
+acc2022 <- total2022[total2022$TaggedPitchType == "Fastball",]
+
+# Filter by Minimum Speed
+acc2022 <- acc2022[acc2022$RelSpeed > 85.999,]
+
+
+names <- unique(acc2022$Pitcher)
+
+names
+
+head(acc2022)
+
+#There are 4293 pitchers in this dataset.
+
+##We will filter them down by fastball type
+```
+
+# Fastball Filtering
+
+```{r}
+# Separating lefties and righties
+
+accRight <- acc2022[acc2022$PitcherThrows == "Right",]
+accLeft <- acc2022[acc2022$PitcherThrows == "Left",]
+
+dim(accRight)
+
+
+# Using tilt to separate four-seamers and two-seamers
+rightTilt <- function(){
+  for(i in 1:dim(accRight)[1]){
+    if(is.na(accRight$`Tilt Coordinate`[i]) == TRUE){
+      accRight$`Pitch Assignment`[i] <<- "None"
+    }
+    else if(accRight$`Tilt Coordinate`[i] > 0.07 && accRight$`Tilt Coordinate`[i] < .135){
+      accRight$`Pitch Assignment`[i] <<- "Right Two-Seam"
+    }
+    else if(accRight$`Tilt Coordinate`[i] > 0.04  && accRight$`Tilt Coordinate`[i] < .065){
+      accRight$`Pitch Assignment`[i] <<- "Right Four-Seam"
+    }
+    else if(accRight$`Tilt Coordinate`[i] > 0.499 && accRight$`Tilt Coordinate`[i] < .532){
+      accRight$`Pitch Assignment`[i] <<- "Right Four-Seam"
+    }
+  }
+  return(accRight$`Pitch Assignment`)
+}
+
+rightTilt()
+
+leftTilt <- function(){
+  for(i in 1:dim(accLeft)[1]){
+    if(is.na(accLeft$`Tilt Coordinate`[i]) == TRUE){
+      accLeft$`Pitch Assignment`[i] <<- "None"
+    }
+    else if(accLeft$`Tilt Coordinate`[i] > .3749 && accLeft$`Tilt Coordinate`[i] < .428){
+      accLeft$`Pitch Assignment`[i] <<- "Left Two-Seam"
+    }
+    else if(accLeft$`Tilt Coordinate`[i] >  .437 && accLeft$`Tilt Coordinate`[i] < 0.501){
+      accLeft$`Pitch Assignment`[i] <<- "Left Four-Seam"
+    }
+  }
+  return(accLeft$`Pitch Assignment`)
+}
+
+leftTilt()
+
+```
+
+
+```{r}
+#Adjusting for Known Pitchers
+
+##Not all pitches will be correct simply by tilt
+###For Clemson pitchers and Ben Joyce, all of their pitches will be corrected to fit their pitching style
+
+#Exceptions: Jay Dill and Mack Anglin (throw both types)
+pitcherChangeR <- function(){
+  for(i in 1:length(accRight$Pitcher)){
+    if(is.na(accRight$Pitcher[i]) == TRUE){
+      accRight$`Pitch Assignment`[i] <<- "None"
+    }
+    else if(accRight$Pitcher[i] == "Joyce, Ben"){
+      accRight$`Pitch Assignment`[i] <<- "Right Four-Seam"
+    }
+    else if(accRight$Pitcher[i] == "Hoffmann, Nick"){
+      accRight$`Pitch Assignment`[i] <<- "Right Four-Seam"
+    }
+    else if(accRight$Pitcher[i] == "Gordon, Austin"){
+      accRight$`Pitch Assignment`[i] <<- "Right Four-Seam"
+    }
+    else if(accRight$Pitcher[i] == "Williams, Ricky"){
+      accRight$`Pitch Assignment`[i] <<- "Right Four-Seam"
+    }
+    else if(accRight$Pitcher[i] == "Tallent, Casey"){
+      accRight$`Pitch Assignment`[i] <<- "Right Four-Seam"
+    }
+    else if(accRight$Pitcher[i] == "Olenchuck, Ty"){
+      accRight$`Pitch Assignment`[i] <<- "Right Four-Seam"
+    }
+    else if(accRight$Pitcher[i] == "Edmondson, Alex"){
+      accRight$`Pitch Assignment`[i] <<- "Right Four-Seam"
+    }
+    else if(accRight$Pitcher[i] == "Gilbert, Geoffrey"){
+      accRight$`Pitch Assignment`[i] <<- "Right Two-Seam"
+    }
+    else if(accRight$Pitcher[i] == "Ammons, Ryan"){
+      accRight$`Pitch Assignment`[i] <<- "Right Two-Seam"
+    }
+    else if(accRight$Pitcher[i] == "Labriola, Paul"){
+      accRight$`Pitch Assignment`[i] <<- "Right Two-Seam"
+    }
+  }
+  return(accRight$`Pitch Assignment`)
+}
+
+pitcherChangeL <- function(){
+  for(i in 1:length(accLeft$Pitcher)){
+    if(is.na(accLeft$Pitcher[i]) == TRUE){
+      accLeft$`Pitch Assignment`[i] <<- "None"
+    }
+    else if(accLeft$Pitcher[i] == "Grice, Caden"){
+      accLeft$`Pitch Assignment`[i] <<- "Left Two-Seam"
+    }
+    else if(accLeft$Pitcher[i] == "Reid, Rocco"){
+      accLeft$`Pitch Assignment`[i] <<- "Left Two-Seam"
+    }
+    else if(accLeft$Pitcher[i] == "Lindley, Jackson"){
+      accLeft$`Pitch Assignment`[i] <<- "Left Four-Seam"
+    }
+    else if(accLeft$Pitcher[i] == "Clayton, Nick"){
+      accLeft$`Pitch Assignment`[i] <<- "Left Four-Seam"
+    }
+    else if(accLeft$Pitcher[i] == "Barlow, Billy"){
+      accLeft$`Pitch Assignment`[i] <<- "Left Four-Seam"
+    }
+  }
+  return(accLeft$`Pitch Assignment`)
+}
+
+pitcherChangeR()
+pitcherChangeL()
+
+```
+
+# Fastball Filtering
+
+
+```{r}
+
+accRightFour <- accRight[accRight$`Pitch Assignment` == "Right Four-Seam",]
+accRightTwo <- accRight[accRight$`Pitch Assignment` == "Right Two-Seam",]
+
+#Filter out bad pitchers
+accRightTwo <- accRightTwo[accRightTwo$Pitcher != "Maxwell, Zachary",]
+
+accRightFour <- accRightFour[is.na(accRightFour$Pitcher) == FALSE,]
+
+#Zachary Maxwell's two-seamers break the code due to their unorthodox measurables. As this is the only instance, we will assume these are incorrectly marked as two-seamers based on their Tilt, and omit him from this subset.
+##We have an NA in the four-seam dataset when ran normally, which breaks the code.
+
+dim(accRightFour)
+dim(accRightTwo)
+
+accLeftFour <- accLeft[accLeft$`Pitch Assignment` == "Left Four-Seam",]
+accLeftTwo <- accLeft[accLeft$`Pitch Assignment` == "Left Two-Seam",]
+dim(accLeftFour)
+dim(accLeftTwo)
+
+
+```
+
+
+```{r}
+# Set Pitch Minimum at 20 Pitches:
+
+##This code takes 6 runs
+###Make sure not to continue until the dimensions line up after running
+
+#### Then continue
+
+pitcherClearLF <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    x <- accLeftFour
+    base <- unique(x$Pitcher)[i]
+    if(length(x[x$Pitcher == base,]$PitchNo) < 20){
+      accLeftFour <<- subset(x, x$Pitcher != base)
+    }
+  }
+  return(accLeftFour)
+}
+
+pitcherClearLT <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    x <- accLeftTwo
+    base <- unique(x$Pitcher)[i]
+    if(length(x[x$Pitcher == base,]$PitchNo) < 20){
+      accLeftTwo <<- subset(x, x$Pitcher != base)
+    }
+  }
+  return(accLeftTwo)
+}
+
+pitcherClearRF <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    x <- accRightFour
+    base <- unique(x$Pitcher)[i]
+    if(length(x[x$Pitcher == base,]$PitchNo) < 20){
+      accRightFour <<- subset(x, x$Pitcher != base)
+    }
+  }
+  return(accRightFour)
+}
+
+pitcherClearRT <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    x <- accRightTwo
+    base <- unique(x$Pitcher)[i]
+    if(length(x[x$Pitcher == base,]$PitchNo) < 20){
+      accRightTwo <<- subset(x, x$Pitcher != base)
+    }
+  }
+  return(accRightTwo)
+}
+
+dim(accLeftFour)
+pitcherClearLF(accLeftFour)
+dim(accLeftFour)
+
+dim(accRightTwo)
+pitcherClearRT(accRightTwo)
+dim(accRightTwo)
+
+dim(accRightFour)
+pitcherClearRF(accRightFour)
+dim(accRightFour)
+
+dim(accLeftTwo)
+pitcherClearLT(accLeftTwo)
+dim(accLeftTwo)
+
+```
+
+
+# Find Averages and Standard Deviations for Excel
+
+
+## Find Mean and Standard Deviation for Metrics
+
+```{r}
+rightFourVeloMean <- mean(accRightFour$RelSpeed)
+rightTwoVeloMean <- mean(accRightTwo$RelSpeed)
+leftFourVeloMean <- mean(accLeftFour$RelSpeed)
+leftTwoVeloMean <- mean(accLeftTwo$RelSpeed)
+
+rightFourVeloSD <- sd(accRightFour$RelSpeed)
+rightTwoVeloSD <- sd(accRightTwo$RelSpeed)
+leftFourVeloSD <- sd(accLeftFour$RelSpeed)
+leftTwoVeloSD <- sd(accLeftTwo$RelSpeed)
+
+rightFourHorzMean <- abs(mean(accRightFour$HorzBreak))
+rightTwoHorzMean <- abs(mean(accRightTwo$HorzBreak))
+leftFourHorzMean <- abs(mean(accLeftFour$HorzBreak))
+leftTwoHorzMean <- abs(mean(accLeftTwo$HorzBreak))
+
+rightFourHorzSD <- abs(sd(accRightFour$HorzBreak))
+rightTwoHorzSD <- abs(sd(accRightTwo$HorzBreak))
+leftFourHorzSD <- abs(sd(accLeftFour$HorzBreak))
+leftTwoHorzSD <- abs(sd(accLeftTwo$HorzBreak))
+
+rightFourIVBMean <- mean(accRightFour$InducedVertBreak)
+rightTwoIVBMean <- mean(accRightTwo$InducedVertBreak)
+leftFourIVBMean <- mean(accLeftFour$InducedVertBreak)
+leftTwoIVBMean <- mean(accLeftTwo$InducedVertBreak)
+
+rightFourIVBSD <- sd(accRightFour$InducedVertBreak)
+rightTwoIVBSD <- sd(accRightTwo$InducedVertBreak)
+leftFourIVBSD <- sd(accLeftFour$InducedVertBreak)
+leftTwoIVBSD <- sd(accLeftTwo$InducedVertBreak)
+
+leftTwoIVBMean
+leftTwoHorzMean
+leftTwoVeloMean
+
+leftTwoIVBSD
+leftTwoHorzSD
+leftTwoVeloSD
+
+leftFourIVBMean
+leftFourHorzMean
+leftFourVeloMean
+
+leftFourIVBSD
+leftFourHorzSD
+leftFourVeloSD
+
+rightFourIVBMean
+rightFourHorzMean
+rightFourVeloMean
+
+rightFourIVBSD
+rightFourHorzSD
+rightFourVeloSD
+
+rightTwoIVBMean
+rightTwoHorzMean
+rightTwoVeloMean
+
+rightTwoIVBSD
+rightTwoHorzSD
+rightTwoVeloSD
+```
+
+## Find Average Extension
+```{r}
+extension <- vector()
+extensionFunction <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    base <- unique(x$Pitcher)[i]
+    pitcher <- x[x$Pitcher == base,]
+    exten <- pitcher[is.na(pitcher$Extension) == FALSE,]
+    extension[i] <- mean(exten$Extension)
+  }
+  return(extension)
+}
+
+rightFourExtension <- extensionFunction(accRightFour)
+rightTwoExtension <- extensionFunction(accRightTwo)
+leftFourExtension <- extensionFunction(accLeftFour)
+leftTwoExtension <- extensionFunction(accLeftTwo)
+
+
+
+rightFourExtensionMean <- mean(rightFourExtension)
+rightTwoExtensionMean <- mean(rightTwoExtension)
+leftFourExtensionMean <- mean(leftFourExtension)
+leftTwoExtensionMean <- mean(leftTwoExtension)
+
+rightFourExtensionSD <- sd(rightFourExtension)
+rightTwoExtensionSD <- sd(rightTwoExtension)
+leftFourExtensionSD <- sd(leftFourExtension)
+leftTwoExtensionSD <- sd(leftTwoExtension)
+
+rightFourExtensionMean
+rightTwoExtensionMean
+leftFourExtensionMean
+leftTwoExtensionMean
+
+rightFourExtensionSD
+rightTwoExtensionSD
+leftFourExtensionSD
+leftTwoExtensionSD
+```
+
+## Find Average Induced Vert by Bucket
+
+```{r}
+bucket1 <- vector()
+bucket2 <- vector()
+bucket3 <- vector()
+bucket4 <- vector()
+bucket5 <- vector()
+bucket6 <- vector()
+bucket7 <- vector()
+bucket8 <- vector()
+bucket9 <- vector()
+bucket10 <- vector()
+bucket11 <- vector()
+bucket12 <- vector()
+
+bucketMeanFunction <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    base <- unique(x$Pitcher)[i]
+    pitcher <- x[x$Pitcher == base,]
+    for(a in 1:length(pitcher$RelHeight)){
+      if(pitcher$RelHeight[a] > 4.5 && pitcher$RelHeight[a] < 4.7){
+      bucket1 <<- append(bucket1, pitcher$InducedVertBreak[a])
+    }
+    else if(pitcher$RelHeight[a] > 4.7 && pitcher$RelHeight[a] < 4.9){
+      bucket2 <<- append(bucket2, pitcher$InducedVertBreak[a])
+    }
+    else if(pitcher$RelHeight[a] > 4.9 && pitcher$RelHeight[a] < 5.1){
+      bucket3 <<- append(bucket3, pitcher$InducedVertBreak[a])
+    }
+    else if(pitcher$RelHeight[a] > 5.1 && pitcher$RelHeight[a] < 5.3){
+      bucket4 <<- append(bucket4, pitcher$InducedVertBreak[a])
+    }
+    else if(pitcher$RelHeight[a] > 5.3 && pitcher$RelHeight[a] < 5.5){
+      bucket5 <<- append(bucket5, pitcher$InducedVertBreak[a])
+    }
+    else if(pitcher$RelHeight[a] > 5.5 && pitcher$RelHeight[a] < 5.7){
+      bucket6 <<- append(bucket6, pitcher$InducedVertBreak[a])
+    }
+    else if(pitcher$RelHeight[a] > 5.7 && pitcher$RelHeight[a] < 5.9){
+      bucket7 <<- append(bucket7, pitcher$InducedVertBreak[a])
+    }
+    else if(pitcher$RelHeight[a] > 5.9 && pitcher$RelHeight[a] < 6.1){
+      bucket8 <<- append(bucket8, pitcher$InducedVertBreak[a])
+    }
+    else if(pitcher$RelHeight[a] > 6.1 && pitcher$RelHeight[a] < 6.3){
+      bucket9 <<- append(bucket9, pitcher$InducedVertBreak[a])
+    }
+    else if(pitcher$RelHeight[a] > 6.3 && pitcher$RelHeight[a] < 6.5){
+      bucket10 <<- append(bucket10, pitcher$InducedVertBreak[a])
+    }
+    else if(pitcher$RelHeight > 6.5 && pitcher$RelHeight < 6.7){
+      bucket11 <<- append(bucket11, pitcher$InducedVertBreak) 
+    }
+    else if(pitcher$RelHeight[a] > 6.7 && pitcher$RelHeight[a] < 6.9){
+      bucket12 <<- append(bucket12, pitcher$InducedVertBreak[a])
+    }
+    else if(pitcher$RelHeight[a] < 4.5){
+      bucket1 <<- append(bucket1, pitcher$InducedVertBreak[a])
+    }
+    else if(pitcher$RelHeight[a] > 6.9){
+      bucket12 <<- append(bucket12, pitcher$InducedVertBreak[a])
+    }
+    }
+  }
+  return(c(mean(bucket1), mean(bucket2), mean(bucket3), mean(bucket4), mean(bucket5), mean(bucket6), mean(bucket7), mean(bucket8), mean(bucket9), mean(bucket10), mean(bucket11), mean(bucket12)))
+}
+
+
+rightFourBucketMean <- bucketMeanFunction(accRightFour)
+leftFourBucketMean <- bucketMeanFunction(accLeftFour)
+
+rightFourBucketMean
+leftFourBucketMean
+
+beep(3)
+```
+
+```{r}
+bucketSDFunction <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    base <- unique(x$Pitcher)[i]
+    pitcher <- x[x$Pitcher == base,]
+    for(a in 1:length(pitcher$RelHeight)){
+      if(pitcher$RelHeight[a] > 4.5 && pitcher$RelHeight[a] < 4.7){
+      bucket1 <<- append(bucket1, pitcher$InducedVertBreak[a])
+    }
+    else if(pitcher$RelHeight[a] > 4.7 && pitcher$RelHeight[a] < 4.9){
+      bucket2 <<- append(bucket2, pitcher$InducedVertBreak[a])
+    }
+    else if(pitcher$RelHeight[a] > 4.9 && pitcher$RelHeight[a] < 5.1){
+      bucket3 <<- append(bucket3, pitcher$InducedVertBreak[a])
+    }
+    else if(pitcher$RelHeight[a] > 5.1 && pitcher$RelHeight[a] < 5.3){
+      bucket4 <<- append(bucket4, pitcher$InducedVertBreak[a])
+    }
+    else if(pitcher$RelHeight[a] > 5.3 && pitcher$RelHeight[a] < 5.5){
+      bucket5 <<- append(bucket5, pitcher$InducedVertBreak[a])
+    }
+    else if(pitcher$RelHeight[a] > 5.5 && pitcher$RelHeight[a] < 5.7){
+      bucket6 <<- append(bucket6, pitcher$InducedVertBreak[a])
+    }
+    else if(pitcher$RelHeight[a] > 5.7 && pitcher$RelHeight[a] < 5.9){
+      bucket7 <<- append(bucket7, pitcher$InducedVertBreak[a])
+    }
+    else if(pitcher$RelHeight[a] > 5.9 && pitcher$RelHeight[a] < 6.1){
+      bucket8 <<- append(bucket8, pitcher$InducedVertBreak[a])
+    }
+    else if(pitcher$RelHeight[a] > 6.1 && pitcher$RelHeight[a] < 6.3){
+      bucket9 <<- append(bucket9, pitcher$InducedVertBreak[a])
+    }
+    else if(pitcher$RelHeight[a] > 6.3 && pitcher$RelHeight[a] < 6.5){
+      bucket10 <<- append(bucket10, pitcher$InducedVertBreak[a])
+    }
+    else if(pitcher$RelHeight > 6.5 && pitcher$RelHeight < 6.7){
+      bucket11 <<- append(bucket11, pitcher$InducedVertBreak) 
+    }
+    else if(pitcher$RelHeight[a] > 6.7 && pitcher$RelHeight[a] < 6.9){
+      bucket12 <<- append(bucket12, pitcher$InducedVertBreak[a])
+    }
+    else if(pitcher$RelHeight[a] < 4.5){
+      bucket1 <<- append(bucket1, pitcher$InducedVertBreak[a])
+    }
+    else if(pitcher$RelHeight[a] > 6.9){
+      bucket12 <<- append(bucket12, pitcher$InducedVertBreak[a])
+    }
+    }
+  }
+  return(c(sd(bucket1), sd(bucket2), sd(bucket3), sd(bucket4), sd(bucket5), sd(bucket6), sd(bucket7), sd(bucket8), sd(bucket9), sd(bucket10), sd(bucket11), sd(bucket12)))
+}
+
+rightFourBucketSD <- bucketSDFunction(accRightFour)
+leftFourBucketSD <- bucketSDFunction(accLeftFour)
+
+rightFourBucketSD
+leftFourBucketSD
+```
+# Find Percentiles
+
+```{r}
+filterRightFour <- accRightFour
+filterRightTwo <- accRightTwo
+filterLeftFour <- accLeftFour
+filterLeftTwo <- accLeftTwo
+```
+
+# Split buckets into RHP and LHP
+
+```{r}
+
+#Four-Seam Righties
+
+bucket1RHPFF <- subset(filterRightFour, filterRightFour$RelHeight > 4.5 & filterRightFour$RelHeight < 4.7)
+bucket2RHPFF <- subset(filterRightFour, filterRightFour$RelHeight > 4.7 & filterRightFour$RelHeight < 4.9)
+bucket3RHPFF <- subset(filterRightFour, filterRightFour$RelHeight > 4.9 & filterRightFour$RelHeight < 5.1)
+bucket4RHPFF <- subset(filterRightFour, filterRightFour$RelHeight > 5.1 & filterRightFour$RelHeight < 5.3)
+bucket5RHPFF <- subset(filterRightFour, filterRightFour$RelHeight > 5.3 & filterRightFour$RelHeight < 5.5)
+bucket6RHPFF <- subset(filterRightFour, filterRightFour$RelHeight > 5.5 & filterRightFour$RelHeight < 5.7)
+bucket7RHPFF <- subset(filterRightFour, filterRightFour$RelHeight > 5.7 & filterRightFour$RelHeight < 5.9)
+bucket8RHPFF <- subset(filterRightFour, filterRightFour$RelHeight > 5.9 & filterRightFour$RelHeight < 6.1)
+bucket9RHPFF <- subset(filterRightFour, filterRightFour$RelHeight > 6.1 & filterRightFour$RelHeight < 6.3)
+bucket10RHPFF <- subset(filterRightFour, filterRightFour$RelHeight > 6.3 & filterRightFour$RelHeight < 6.5)
+bucket11RHPFF <- subset(filterRightFour, filterRightFour$RelHeight > 6.5 & filterRightFour$RelHeight < 6.7)
+bucket12RHPFF <- subset(filterRightFour, filterRightFour$RelHeight > 6.7 & filterRightFour$RelHeight < 6.9)
+
+
+#Four-Seam Lefties
+
+bucket1LHPFF <- subset(filterLeftFour, filterLeftFour$RelHeight > 4.5 & filterLeftFour$RelHeight < 4.7)
+bucket2LHPFF <- subset(filterLeftFour, filterLeftFour$RelHeight > 4.7 & filterLeftFour$RelHeight < 4.9)
+bucket3LHPFF <- subset(filterLeftFour, filterLeftFour$RelHeight > 4.9 & filterLeftFour$RelHeight < 5.1)
+bucket4LHPFF <- subset(filterLeftFour, filterLeftFour$RelHeight > 5.1 & filterLeftFour$RelHeight < 5.3)
+bucket5LHPFF <- subset(filterLeftFour, filterLeftFour$RelHeight > 5.3 & filterLeftFour$RelHeight < 5.5)
+bucket6LHPFF <- subset(filterLeftFour, filterLeftFour$RelHeight > 5.5 & filterLeftFour$RelHeight < 5.7)
+bucket7LHPFF <- subset(filterLeftFour, filterLeftFour$RelHeight > 5.7 & filterLeftFour$RelHeight < 5.9)
+bucket8LHPFF <- subset(filterLeftFour, filterLeftFour$RelHeight > 5.9 & filterLeftFour$RelHeight < 6.1)
+bucket9LHPFF <- subset(filterLeftFour, filterLeftFour$RelHeight > 6.1 & filterLeftFour$RelHeight < 6.3)
+bucket10LHPFF <- subset(filterLeftFour, filterLeftFour$RelHeight > 6.3 & filterLeftFour$RelHeight < 6.5)
+bucket11LHPFF <- subset(filterLeftFour, filterLeftFour$RelHeight > 6.5 & filterLeftFour$RelHeight < 6.7)
+bucket12LHPFF <- subset(filterLeftFour, filterLeftFour$RelHeight > 6.7 & filterLeftFour$RelHeight < 6.9)
+
+#Two-Seam Lefties
+
+bucket1LHPTF <- subset(filterLeftTwo, filterLeftTwo$RelHeight > 4.5 & filterLeftTwo$RelHeight < 4.7)
+bucket2LHPTF <- subset(filterLeftTwo, filterLeftTwo$RelHeight > 4.7 & filterLeftTwo$RelHeight < 4.9)
+bucket3LHPTF <- subset(filterLeftTwo, filterLeftTwo$RelHeight > 4.9 & filterLeftTwo$RelHeight < 5.1)
+bucket4LHPTF <- subset(filterLeftTwo, filterLeftTwo$RelHeight > 5.1 & filterLeftTwo$RelHeight < 5.3)
+bucket5LHPTF <- subset(filterLeftTwo, filterLeftTwo$RelHeight > 5.3 & filterLeftTwo$RelHeight < 5.5)
+bucket6LHPTF <- subset(filterLeftTwo, filterLeftTwo$RelHeight > 5.5 & filterLeftTwo$RelHeight < 5.7)
+bucket7LHPTF <- subset(filterLeftTwo, filterLeftTwo$RelHeight > 5.7 & filterLeftTwo$RelHeight < 5.9)
+bucket8LHPTF <- subset(filterLeftTwo, filterLeftTwo$RelHeight > 5.9 & filterLeftTwo$RelHeight < 6.1)
+bucket9LHPTF <- subset(filterLeftTwo, filterLeftTwo$RelHeight > 6.1 & filterLeftTwo$RelHeight < 6.3)
+bucket10LHPTF <- subset(filterLeftTwo, filterLeftTwo$RelHeight > 6.3 & filterLeftTwo$RelHeight < 6.5)
+bucket11LHPTF <- subset(filterLeftTwo, filterLeftTwo$RelHeight > 6.5 & filterLeftTwo$RelHeight < 6.7)
+bucket12LHPTF <- subset(filterLeftTwo, filterLeftTwo$RelHeight > 6.7 & filterLeftTwo$RelHeight < 6.9)
+
+#Two-Seam Righties
+
+bucket1RHPTF <- subset(filterRightTwo, filterRightTwo$RelHeight > 4.5 & filterRightTwo$RelHeight < 4.7)
+bucket2RHPTF <- subset(filterRightTwo, filterRightTwo$RelHeight > 4.7 & filterRightTwo$RelHeight < 4.9)
+bucket3RHPTF <- subset(filterRightTwo, filterRightTwo$RelHeight > 4.9 & filterRightTwo$RelHeight < 5.1)
+bucket4RHPTF <- subset(filterRightTwo, filterRightTwo$RelHeight > 5.1 & filterRightTwo$RelHeight < 5.3)
+bucket5RHPTF <- subset(filterRightTwo, filterRightTwo$RelHeight > 5.3 & filterRightTwo$RelHeight < 5.5)
+bucket6RHPTF <- subset(filterRightTwo, filterRightTwo$RelHeight > 5.5 & filterRightTwo$RelHeight < 5.7)
+bucket7RHPTF <- subset(filterRightTwo, filterRightTwo$RelHeight > 5.7 & filterRightTwo$RelHeight < 5.9)
+bucket8RHPTF <- subset(filterRightTwo, filterRightTwo$RelHeight > 5.9 & filterRightTwo$RelHeight < 6.1)
+bucket9RHPTF <- subset(filterRightTwo, filterRightTwo$RelHeight > 6.1 & filterRightTwo$RelHeight < 6.3)
+bucket10RHPTF <- subset(filterRightTwo, filterRightTwo$RelHeight > 6.3 & filterRightTwo$RelHeight < 6.5)
+bucket11RHPTF <- subset(filterRightTwo, filterRightTwo$RelHeight > 6.5 & filterRightTwo$RelHeight < 6.7)
+bucket12RHPTF <- subset(filterRightTwo, filterRightTwo$RelHeight > 6.7 & filterRightTwo$RelHeight < 6.9)
+```
+
+# Creating Vectors for Percentiles
+```{r}
+# Velocity
+percentileFunction <- function(x){
+  percentileVector <- quantile(na.omit(x$RelSpeed), probs = seq(0, 1, by = 0.01))
+  return(percentileVector)
+}
+
+# Induced Vertical Break
+percentileFunction2 <- function(x){
+  percentileVector <- quantile(na.omit(abs(x$InducedVertBreak)), probs = seq(0, 1, by = 0.01))
+  return(percentileVector)
+}
+
+
+# Horizontal Break
+percentileFunction3 <- function(x){
+  percentileVector <- quantile(na.omit(abs(x$HorzBreak)), probs = seq(0, 1, by = 0.01))
+  return(percentileVector)
+}
+
+# Extension
+percentileFunction4 <- function(x){
+  percentileVector <- quantile(na.omit(x$Extension), probs = seq(0, 1, by = 0.01))
+  return(percentileVector)
+}
+
+
+```
+
+# Combining the Vectors
+
+```{r}
+library(dplyr)
+
+# Velocity
+totalVeloTable <- mapply(c, percentileFunction(bucket1RHPFF), percentileFunction(bucket2RHPFF), percentileFunction(bucket3RHPFF), percentileFunction(bucket4RHPFF), percentileFunction(bucket5RHPFF), percentileFunction(bucket6RHPFF), percentileFunction(bucket7RHPFF), percentileFunction(bucket8RHPFF), percentileFunction(bucket9RHPFF), percentileFunction(bucket10RHPFF), percentileFunction(bucket11RHPFF), percentileFunction(bucket12RHPFF), percentileFunction(bucket1RHPTF), percentileFunction(bucket2RHPTF), percentileFunction(bucket3RHPTF), percentileFunction(bucket4RHPTF), percentileFunction(bucket5RHPTF), percentileFunction(bucket6RHPTF), percentileFunction(bucket7RHPTF), percentileFunction(bucket8RHPTF), percentileFunction(bucket9RHPTF), percentileFunction(bucket10RHPTF), percentileFunction(bucket11RHPTF), percentileFunction(bucket12RHPTF), percentileFunction(bucket1LHPFF), percentileFunction(bucket2LHPFF), percentileFunction(bucket3LHPFF), percentileFunction(bucket4LHPFF), percentileFunction(bucket5LHPFF), percentileFunction(bucket6LHPFF), percentileFunction(bucket7LHPFF), percentileFunction(bucket8LHPFF), percentileFunction(bucket9LHPFF), percentileFunction(bucket10LHPFF), percentileFunction(bucket11LHPFF), percentileFunction(bucket12LHPFF), percentileFunction(bucket1LHPTF), percentileFunction(bucket2LHPTF), percentileFunction(bucket3LHPTF), percentileFunction(bucket4LHPTF), percentileFunction(bucket5LHPTF), percentileFunction(bucket6LHPTF), percentileFunction(bucket7LHPTF), percentileFunction(bucket8LHPTF), percentileFunction(bucket9LHPTF), percentileFunction(bucket10LHPTF), percentileFunction(bucket11LHPTF), percentileFunction(bucket12LHPTF), simplify = FALSE)
+
+write.csv(totalVeloTable, "NCAA Velocity Percentiles by Bucket all Fastballs.csv", sep = "\t", row.names = FALSE)
+
+
+# All Pitches Velocity
+allPitchVelo <- mapply(c, percentileFunction(filterRightFour), percentileFunction(filterRightTwo), percentileFunction(filterLeftFour), percentileFunction(filterLeftTwo), simplify = FALSE)
+
+write.csv(allPitchVelo, "NCAA Velocity Percentiles for all Fastballs.csv", sep = "\t", row.names = FALSE)
+
+# Induced Vertical Break
+totalIVBTable <- mapply(c, percentileFunction2(bucket1RHPFF), percentileFunction2(bucket2RHPFF), percentileFunction2(bucket3RHPFF), percentileFunction2(bucket4RHPFF), percentileFunction2(bucket5RHPFF), percentileFunction2(bucket6RHPFF), percentileFunction2(bucket7RHPFF), percentileFunction2(bucket8RHPFF), percentileFunction2(bucket9RHPFF), percentileFunction2(bucket10RHPFF), percentileFunction2(bucket11RHPFF), percentileFunction2(bucket12RHPFF), percentileFunction2(bucket1RHPTF), percentileFunction2(bucket2RHPTF), percentileFunction2(bucket3RHPTF), percentileFunction2(bucket4RHPTF), percentileFunction2(bucket5RHPTF), percentileFunction2(bucket6RHPTF), percentileFunction2(bucket7RHPTF), percentileFunction2(bucket8RHPTF), percentileFunction2(bucket9RHPTF), percentileFunction2(bucket10RHPTF), percentileFunction2(bucket11RHPTF), percentileFunction2(bucket12RHPTF), percentileFunction2(bucket1LHPFF), percentileFunction2(bucket2LHPFF), percentileFunction2(bucket3LHPFF), percentileFunction2(bucket4LHPFF), percentileFunction2(bucket5LHPFF), percentileFunction2(bucket6LHPFF), percentileFunction2(bucket7LHPFF), percentileFunction2(bucket8LHPFF), percentileFunction2(bucket9LHPFF), percentileFunction2(bucket10LHPFF), percentileFunction2(bucket11LHPFF), percentileFunction2(bucket12LHPFF), percentileFunction2(bucket1LHPTF), percentileFunction2(bucket2LHPTF), percentileFunction2(bucket3LHPTF), percentileFunction2(bucket4LHPTF), percentileFunction2(bucket5LHPTF), percentileFunction2(bucket6LHPTF), percentileFunction2(bucket7LHPTF), percentileFunction2(bucket8LHPTF), percentileFunction2(bucket9LHPTF), percentileFunction2(bucket10LHPTF), percentileFunction2(bucket11LHPTF), percentileFunction2(bucket12LHPTF), simplify = FALSE)
+
+write.csv(totalIVBTable, "NCAA Induced Vertical Percentiles by Bucket all Fastballs.csv", sep = "\t", row.names = FALSE)
+
+
+# All Pitch Vertical Break
+
+allPitchIVB <- mapply(c, percentileFunction2(filterRightFour), percentileFunction2(filterRightTwo), percentileFunction2(filterLeftFour), percentileFunction2(filterLeftTwo), simplify = FALSE)
+
+write.csv(allPitchIVB, "NCAA Induced Vertical Percentiles for all Fastballs.csv", sep = "\t", row.names = FALSE)
+
+
+# Horizontal Break
+totalHorzBreakTable <- mapply(c, percentileFunction3(bucket1RHPFF), percentileFunction3(bucket2RHPFF), percentileFunction3(bucket3RHPFF), percentileFunction3(bucket4RHPFF), percentileFunction3(bucket5RHPFF), percentileFunction3(bucket6RHPFF), percentileFunction3(bucket7RHPFF), percentileFunction3(bucket8RHPFF), percentileFunction3(bucket9RHPFF), percentileFunction3(bucket10RHPFF), percentileFunction3(bucket11RHPFF), percentileFunction3(bucket12RHPFF), percentileFunction3(bucket1RHPTF), percentileFunction3(bucket2RHPTF), percentileFunction3(bucket3RHPTF), percentileFunction3(bucket4RHPTF), percentileFunction3(bucket5RHPTF), percentileFunction3(bucket6RHPTF), percentileFunction3(bucket7RHPTF), percentileFunction3(bucket8RHPTF), percentileFunction3(bucket9RHPTF), percentileFunction3(bucket10RHPTF), percentileFunction3(bucket11RHPTF), percentileFunction3(bucket12RHPTF), percentileFunction3(bucket1LHPFF), percentileFunction3(bucket2LHPFF), percentileFunction3(bucket3LHPFF), percentileFunction3(bucket4LHPFF), percentileFunction3(bucket5LHPFF), percentileFunction3(bucket6LHPFF), percentileFunction3(bucket7LHPFF), percentileFunction3(bucket8LHPFF), percentileFunction3(bucket9LHPFF), percentileFunction3(bucket10LHPFF), percentileFunction3(bucket11LHPFF), percentileFunction3(bucket12LHPFF), percentileFunction3(bucket1LHPTF), percentileFunction3(bucket2LHPTF), percentileFunction3(bucket3LHPTF), percentileFunction3(bucket4LHPTF), percentileFunction3(bucket5LHPTF), percentileFunction3(bucket6LHPTF), percentileFunction3(bucket7LHPTF), percentileFunction3(bucket8LHPTF), percentileFunction3(bucket9LHPTF), percentileFunction3(bucket10LHPTF), percentileFunction3(bucket11LHPTF), percentileFunction3(bucket12LHPTF), simplify = FALSE)
+
+write.csv(totalHorzBreakTable, "NCAA Horizontal Break Percentiles by Bucket all Fastballs.csv", sep = "\t", row.names = FALSE)
+
+# All Pitch Horizontal Break
+
+allPitchHorz <- mapply(c, percentileFunction3(filterRightFour), percentileFunction3(filterRightTwo), percentileFunction3(filterLeftFour), percentileFunction3(filterLeftTwo), simplify = FALSE)
+
+write.csv(allPitchHorz, "NCAA Horizontal Break Percentiles for all Fastballs.csv", sep = "\t", row.names = FALSE)
+
+
+# Extension
+totalExtensionTable <- mapply(c, percentileFunction4(bucket1RHPFF), percentileFunction4(bucket2RHPFF), percentileFunction4(bucket3RHPFF), percentileFunction4(bucket4RHPFF), percentileFunction4(bucket5RHPFF), percentileFunction4(bucket6RHPFF), percentileFunction4(bucket7RHPFF), percentileFunction4(bucket8RHPFF), percentileFunction4(bucket9RHPFF), percentileFunction4(bucket10RHPFF), percentileFunction4(bucket11RHPFF), percentileFunction4(bucket12RHPFF), percentileFunction4(bucket1RHPTF), percentileFunction4(bucket2RHPTF), percentileFunction4(bucket3RHPTF), percentileFunction4(bucket4RHPTF), percentileFunction4(bucket5RHPTF), percentileFunction4(bucket6RHPTF), percentileFunction4(bucket7RHPTF), percentileFunction4(bucket8RHPTF), percentileFunction4(bucket9RHPTF), percentileFunction4(bucket10RHPTF), percentileFunction4(bucket11RHPTF), percentileFunction4(bucket12RHPTF), percentileFunction4(bucket1LHPFF), percentileFunction4(bucket2LHPFF), percentileFunction4(bucket3LHPFF), percentileFunction4(bucket4LHPFF), percentileFunction4(bucket5LHPFF), percentileFunction4(bucket6LHPFF), percentileFunction4(bucket7LHPFF), percentileFunction4(bucket8LHPFF), percentileFunction4(bucket9LHPFF), percentileFunction4(bucket10LHPFF), percentileFunction4(bucket11LHPFF), percentileFunction4(bucket12LHPFF), percentileFunction4(bucket1LHPTF), percentileFunction4(bucket2LHPTF), percentileFunction4(bucket3LHPTF), percentileFunction4(bucket4LHPTF), percentileFunction4(bucket5LHPTF), percentileFunction4(bucket6LHPTF), percentileFunction4(bucket7LHPTF), percentileFunction4(bucket8LHPTF), percentileFunction4(bucket9LHPTF), percentileFunction4(bucket10LHPTF), percentileFunction4(bucket11LHPTF), percentileFunction4(bucket12LHPTF), simplify = FALSE)
+
+write.csv(totalExtensionTable, "NCAA Extension Break Percentiles by Bucket all Fastballs.csv", sep = "\t", row.names = FALSE)
+
+# All Pitch Extension
+
+allPitchExt <- mapply(c, percentileFunction4(filterRightFour), percentileFunction4(filterRightTwo), percentileFunction4(filterLeftFour), percentileFunction4(filterLeftTwo), simplify = FALSE)
+
+write.csv(allPitchExt, "NCAA Extension Percentiles for all Fastballs.csv", sep = "\t", row.names = FALSE)
+```
+
+
+# Validation
+
+```{r}
+#Load Data
+
+
+accRightFourStuff <- read.csv("2022 NCAA Right Handed Four Seam Stuff+ Validation.csv")
+accRightTwoStuff <- read.csv("2022 NCAA Right Handed Two Seam Stuff+ Validation.csv")
+accLeftFourStuff <- read.csv("2022 NCAA Left Handed Four Seam Stuff+ Validation.csv")
+accLeftTwoStuff <- read.csv("2022 NCAA Left Handed Two Seam Stuff+ Validation.csv")
+
+accLeftTwoStuff
+
+accRightFourStuff
+
+length(rightFourWhiff)
+
+
+#Merge Data into one table
+
+mergeFunction <- function(x,y,z){
+  whiffTable <- data.frame(Pitcher = unique(x$Pitcher), Whiff = y, stringsAsFactors = FALSE)
+  mergedTable <- merge(z, whiffTable, by.y = "Pitcher")
+  return(mergedTable)
+}
+
+rightFourMerged <- mergeFunction(accRightFour, rightFourWhiff, accRightFourStuff)
+rightTwoMerged <- mergeFunction(accRightTwo, rightTwoWhiff, accRightTwoStuff)
+leftFourMerged <- mergeFunction(accLeftFour, leftFourWhiff, accLeftFourStuff)
+leftTwoMerged <- mergeFunction(accLeftTwo, leftTwoWhiff, accLeftTwoStuff)
+
+rightFourMerged
+
+```
+
+# Multiple Linear Regression:
+
+```{r}
+summary(lm(Whiff ~ Stuff., data = rightFourMerged))
+
+summary(lm(Whiff ~ Velo.. + Horz.. + IVB.. + IVB.by.Bucket.., data = rightFourMerged))
+
+summary(lm(Whiff ~ Adjusted.Velo + Horz + IVB, data = rightFourMerged))
+
+```
+# Left Four Seam Fastball
+
+```{r}
+summary(lm(Whiff ~ Stuff., data = leftFourMerged))
+
+summary(lm(Whiff ~ Velo.. + Horz.. + IVB.. + IVB.by.Bucket.., data = leftFourMerged))
+
+summary(lm(Whiff ~ Adjusted.Velo + Horz + IVB, data = leftFourMerged))
+```
+## Right Handed Two Seamers
+
+```{r}
+summary(lm(Whiff ~ Stuff., data = rightTwoMerged))
+
+summary(lm(Whiff ~ Velo.. + Horz.. + IVB.., data = rightTwoMerged))
+
+summary(lm(Whiff ~ Adjusted.Velo + Horz + IVB, data = rightTwoMerged))
+```
+
+
+```{r}
+summary(lm(Whiff ~ Stuff., data = leftTwoMerged))
+
+summary(lm(Whiff ~ Velo.. + Horz.. + IVB.., data = leftTwoMerged))
+
+summary(lm(Whiff ~ Adjusted.Velo + Horz + IVB, data = leftTwoMerged))
+```
+
+
+
+
+
+# Calculate Swinging Strike%
+
+
+
+## Find Number of Strikes
+
+```{r}
+swing <- vector()
+
+strike <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    base <- unique(x$Pitcher)[i]
+    pitcher <- x[x$Pitcher == base,]
+    swingStrike <- pitcher[pitcher$PitchCall == "StrikeSwinging",]
+    swing[i] <- dim(swingStrike)[1]
+  }
+  return(swing)
+}
+
+KRF <- strike(accRightFour)
+
+KRT <- strike(accRightTwo)
+KLF <- strike(accLeftFour)
+KLT <- strike(accLeftTwo)
+
+KRF
+
+KRF[93]
+```
+
+# Find Number of Pitches
+
+```{r}
+
+#SwStr% involves all pitches, not just swings
+
+count <- vector()
+pitchCount2 <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    number <- 0
+    base <- unique(x$Pitcher)[i]
+    pitcher <- x[x$Pitcher == base,]
+    count[i] <- length(pitcher$PitchNo)
+  }
+  return(count)
+}
+
+
+
+rightFourCount <- pitchCount2(accRightFour)
+leftFourCount <- pitchCount2(accLeftFour)
+rightTwoCount <- pitchCount2(accRightTwo)
+leftTwoCount <- pitchCount2(accLeftTwo)
+
+rightFourCount
+leftFourCount
+rightTwoCount
+leftTwoCount
+
+rightFourCount[1]
+```
+
+
+# Find SwStr%
+
+```{r}
+swStr <- vector()
+
+swStrFunctionRF <- function(){
+  for(i in 1:length(KRF)){
+    swStr[i] <- 100*KRF[i] / rightFourCount[i]
+  }
+  return(swStr)
+}
+
+swStrFunctionRT <- function(){
+  for(i in 1:length(KRT)){
+    swStr[i] <- 100*KRT[i] / rightTwoCount[i]
+  }
+  return(swStr)
+}
+
+swStrFunctionLF <- function(){
+  for(i in 1:length(KLF)){
+    swStr[i] <- 100*KLF[i] / leftFourCount[i]
+  }
+  return(swStr)
+}
+
+whiffFunctionLT <- function(){
+  for(i in 1:length(KLT)){
+    whiff[i] <- 100*KLT[i] / leftTwoCount[i]
+  }
+  return(whiff)
+}
+
+rightFourWhiff <- whiffFunctionRF()
+rightTwoWhiff <- whiffFunctionRT()
+leftFourWhiff <- whiffFunctionLF()
+leftTwoWhiff <- whiffFunctionLT()
+
+rightFourWhiff
+
+rightFourWhiff[93]
+```
+
+
+# Calculate Barrel %
+
+```{r}
+barrels <- vector()
+hitting <- vector()
+
+# Counting the Number of Barrels
+barrel <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    data <- x[x$Pitcher == unique(x$Pitcher)[i],]
+    for(a in 1:length(data$PitchNo)){
+      count <- 0
+      if(data$TaggedHitType[a] == "FlyBall"){ #Barrel Component 1
+        if(data$ExitSpeed[a] > 95 & is.na(data$ExitSpeed[a]) == FALSE){ #Barrel Component 2
+          count <- count + 1
+        }
+      }
+      else if(data$TaggedHitType[a] == "LineDrive"){
+        if(data$ExitSpeed[a] > 95 & is.na(data$ExitSpeed[a]) == FALSE){
+          count <- count + 1
+        }
+      }
+    }
+    barrels[i] <- count
+  }
+  return(barrels)
+}
+
+# Counting the Number of Hits
+hit <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    count2 <- 0
+    if(x$TaggedHitType[i] != "Undefined"){ #Undefined is the default for non-hits
+      count2 <- count2 + 1
+    }
+    hitting[i] <- count2
+  }
+  return(hitting)
+}
+
+
+rightFourBarrel <- barrel(accRightFour)
+leftFourBarrel <- barrel(accLeftFour)
+rightTwoBarrel <- barrel(accRightTwo)
+leftTwoBarrel <- barrel(accLeftTwo)
+
+rightFourBarrel
+
+
+rightFourHit <- hit(accRightFour)
+leftFourHit <- hit(accLeftFour)
+rightTwoHit <- hit(accRightTwo)
+leftTwoHit <- hit(accLeftTwo)
+```
+
+## Barrel%
+
+```{r}
+barreling <- vector()
+
+barrelFunctionRF <- function(){
+  for(i in 1:length(rightFourBarrel)){
+    barreling[i] <- 100*rightFourBarrel[i] / rightFourHit[i]
+  }
+  return(barreling)
+}
+
+barrelFunctionRT <- function(){
+  for(i in 1:length(rightTwoBarrel)){
+    barreling[i] <- 100*rightTwoBarrel[i] / rightTwoHit[i]
+  }
+  return(barreling)
+}
+
+barrelFunctionLF <- function(){
+  for(i in 1:length(leftFourBarrel)){
+    barreling[i] <- 100*leftFourBarrel[i] / leftFourHit[i]
+  }
+  return(barreling)
+}
+
+barrelFunctionLT <- function(){
+  for(i in 1:length(leftTwoBarrel)){
+    barreling[i] <- 100*leftTwoBarrel[i] / leftTwoHit[i]
+  }
+  return(barreling)
+}
+
+rightFourBarrel <- barrelFunctionRF()
+rightTwoBarrel <- barrelFunctionRT()
+leftFourBarrel <- barrelFunctionLF()
+leftTwoBarrel <- barrelFunctionLT()
+```
+
+
+## Merge Data Tables
+
+```{r}
+rightFourMerged2 <- mergeFunction(accRightFour, rightFourBarrel, accRightFourStuff)
+rightTwoMerged2 <- mergeFunction(accRightTwo, rightTwoBarrel, accRightTwoStuff)
+leftFourMerged2 <- mergeFunction(accLeftFour, leftFourBarrel, accLeftFourStuff)
+leftTwoMerged2 <- mergeFunction(accLeftTwo, leftTwoBarrel, accLeftTwoStuff)
+
+rightFourMerged2
+```
