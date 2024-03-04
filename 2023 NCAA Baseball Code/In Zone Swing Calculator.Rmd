@@ -1,0 +1,123 @@
+---
+title: "Offensive KPI Calculator"
+author: "Alexander Harriman"
+date: "2023-01-15"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This code calculates the 13 Clemson offensive KPIs for all players on a specific team. Each game will be separated so the results can be tracked throughout the season. The data begins from one file, but due to looking at one specific team, the file can be all games instead of a subset of just that team's games.
+
+The end result is a file used in Tableau to create the offensive KPI dashboard.
+
+# Load Data
+
+```{r}
+fullData <- read.csv("22tm_fullReClass.csv")
+```
+
+# Select Batter Team
+
+The BatterTeam column will be used to subset down to one team. If using all data and only looking at one team, this saves a lot of run time when calculating metrics later. If using multiple teams, skip this code (and later code may need to be edited as a result).
+
+```{r}
+team <- fullData[fullData$BatterTeam == "CLE_TIG",]
+```
+
+# Create Batter List
+
+Creating this list is necessary to iterate over all players later. Setting the seed ensures continuity.
+
+```{r}
+set.seed(143)
+batterList <- unique(team$Batter)
+```
+
+# Create Game List
+
+The games will be separated by GameID; this will account for both the date and any doubleheaders. 
+
+```{r}
+gameList <- unique(team$GameID)
+```
+
+
+# Plate Decisions
+
+## In Zone Swing%
+
+In zone swing% is found by taking the number of swings in the zone and dividing by the number of pitches in the zone.
+
+Swings are all pitches ending in SwingingStrike, InPlay, or FoulBall.
+
+```{r}
+zoneSwing <- 0
+zoneCount <- 0
+inZoneVect <- vector()
+finalVect <- vector()
+
+inZoneSwingFunc <- function(){
+  for(i in 1:length(gameList)){
+    game <- team[team$GameID == gameList[i],]
+    for(j in 1:length(batterList)){
+      batter <- game[game$Batter == batterList[j],]
+      for(k in 1:dim(batter)[1]){
+        if(dim(batter)[1] == 0){
+          inZoneVect[j] = NA
+          next
+        }
+        else if(batter$ZoneType[k] == "Heart" | batter$ZoneType[k] == "Edge"){
+          zoneCount <- zoneCount + 1
+          if(batter$PitchCall[k] == "InPlay" | batter$PitchCall[k] == "FoulBall" | batter$PitchCall[k] == "StrikeSwinging"){
+            zoneSwing <- zoneSwing + 1
+          }
+        }
+      }
+      inZoneVect[j] <- (100 * zoneSwing) / zoneCount
+      zoneSwing <- 0
+      zoneCount <- 0
+    }
+    finalVect <<- append(finalVect, inZoneVect)
+    inZoneVect <- vector()
+  }
+  return(finalVect)
+}
+
+inZonePercent <- inZoneSwingFunc()
+
+inZonePercent
+```
+# Create Final Vectors for Names and Games
+
+This is what will be used in the final exported table to make sure everything aligns with the names and metrics.
+
+```{r}
+finalGameVect <- vector()
+
+assignFunction <- function(){
+  for(i in 1:length(gameList)){
+    finalGameVect <<- append(finalGameVect, rep(gameList[i], length(batterList)))
+  }
+  return(finalGameVect)
+}
+
+gameVector <- assignFunction()
+```
+
+
+# Create Final Exported Table
+
+This code chunk takes all of the metrics and combines them together into one clean file for export into Tableau.
+
+```{r}
+finalTable <- qpcR:::cbind.na(rep(batterList, length(gameList)), gameVector, inZonePercent)
+
+colnames(finalTable) <- c("Batter", "GameID", "InZoneSwingPercent")
+
+write.csv(finalTable, "Test A.csv", row.names = FALSE)
+```
+
+
