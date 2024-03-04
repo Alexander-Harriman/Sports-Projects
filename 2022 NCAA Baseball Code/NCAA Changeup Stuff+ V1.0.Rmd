@@ -1,0 +1,634 @@
+---
+title: "NCAA Changeup Stuff+ Version 1"
+author: "Jesse Taylor"
+date: "6/8/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load Percentiles
+
+```{r}
+library(beepr)
+
+allVelo <- read.csv("Velocity Percentiles for all Changeups NCAA.csv")
+allInducedVert <- read.csv("Induced Vertical Percentiles for all Changeups NCAA.csv")
+allHorizontal <- read.csv("Horizontal Break Percentiles for all Changeups NCAA.csv")
+allExtension <- read.csv("Extension Percentiles for all Changeups NCAA.csv")
+
+allVelo
+allInducedVert
+allHorizontal
+allExtension
+```
+
+```{r, warning = FALSE}
+library(readxl)
+pitchers2022o <- read_excel("Reduced 2022 Trackman (5-4).xlsx")
+pitchers2022n <- read_excel("Reduced 2022 Trackman (5-5 to 5-21).xlsx")
+
+pitchers2022 <- rbind(pitchers2022n, pitchers2022o)
+ncaaFastball2022 <- pitchers2022[pitchers2022$TaggedPitchType == "Fastball",]
+ncaaChangeup2022 <- pitchers2022[pitchers2022$TaggedPitchType == "ChangeUp",]
+
+# Filter Fastballs by Minimum Speed
+ncaaFastball2022 <- ncaaFastball2022[ncaaFastball2022$RelSpeed > 85.999,]
+
+# Combining Fastballs and Changeups together
+ncaaFastChange2022 = rbind(ncaaFastball2022, ncaaChangeup2022)
+```
+
+# Fastball Filtering
+
+```{r}
+# Separating lefties and righties
+
+ncaaRight <- ncaaFastChange2022[ncaaFastChange2022$PitcherThrows == "Right",]
+ncaaLeft <- ncaaFastChange2022[ncaaFastChange2022$PitcherThrows == "Left",]
+```
+
+# Filtering
+
+```{r}
+
+pitchersLeft <- data.frame()
+pitchersRight <- data.frame()
+
+#Removing NA Values
+ncaaLeft <- ncaaLeft[!is.na(ncaaLeft$TaggedPitchType),]
+ncaaRight <- ncaaRight[!is.na(ncaaRight$TaggedPitchType),]
+ncaaRight <- ncaaRight[!is.na(ncaaRight$Pitcher),]
+
+fastCount = 0
+changeCount = 0
+pitcherCount = 0
+
+
+pitcherClearLeft <- function(){
+  for(i in 1:length(unique(ncaaLeft$Pitcher))){
+    base <- unique(ncaaLeft$Pitcher)[i]
+    pitcher <- ncaaLeft[ncaaLeft$Pitcher == base,]
+    for(i in 1:length(pitcher$PitchNo)){
+      if(pitcher$TaggedPitchType[i] == "Fastball"){
+        fastCount = fastCount + 1
+      } 
+      else if(pitcher$TaggedPitchType[i] == "ChangeUp"){
+        changeCount = changeCount + 1
+      }
+    }
+    #Minimum 50 fastballs and 50 changeups required
+    if(fastCount > 49 && changeCount > 49){ 
+      pitchersLeft <<- merge(pitchersLeft, pitcher, all = TRUE)
+    }
+    fastCount = 0
+    changeCount = 0
+  }
+  return(pitchersLeft)
+}
+
+pitcherClearRight <- function(){
+  for(i in 1:length(unique(ncaaRight$Pitcher))){
+    base <- unique(ncaaRight$Pitcher)[i]
+    pitcher <- ncaaRight[ncaaRight$Pitcher == base,]
+    for(i in 1:length(pitcher$PitchNo)) {
+      if(pitcher$TaggedPitchType[i] == "Fastball") {
+        fastCount = fastCount + 1
+      }
+      else if(pitcher$TaggedPitchType[i] == "ChangeUp") {
+        changeCount = changeCount + 1
+      }
+    }
+    #Minimum 50 fastballs and 50 changeups required
+    if(fastCount > 49 && changeCount > 49){
+      pitchersRight <<- merge(pitchersRight, pitcher, all = TRUE)
+    }
+    fastCount = 0
+    changeCount = 0
+    pitcherCount = pitcherCount + 1
+    print(pitcherCount)  #Making sure the code runs properly
+  }
+  return(pitchersRight)
+}
+
+
+dim(pitchersLeft)
+pitcherClearLeft()
+dim(pitchersLeft) 
+
+dim(pitchersRight)
+pitcherClearRight() 
+dim(pitchersRight) 
+```
+
+# Seeing if they throw 4 seam or 2 seam
+
+```{r}
+
+pitchersLLeft <- pitchersLeft
+pitchersRRight <- pitchersRight
+
+leftR <- data.frame()
+rightR <- data.frame()
+
+
+
+fourVsTwoLeft = function(x) {
+  changeup = subset(pitchersLLeft, pitchersLLeft$TaggedPitchType == "ChangeUp")
+  fastball = subset(pitchersLLeft, pitchersLLeft$TaggedPitchType == "Fastball")
+  
+  for(i in 1:length(unique(fastball$Pitcher))) {
+    base <- unique(fastball$Pitcher)[i]
+    pitcher <- fastball[fastball$Pitcher == base,]
+    twoCount = 0
+    fourCount = 0
+    fourVec = data.frame()
+    twoVec = data.frame()
+    for(i in 1:length(pitcher$TaggedPitchType)) {
+      if(is.na(pitcher$`Tilt Coordinate`[i]) == TRUE){
+        fourCount = fourCount + 1
+        fourVec = rbind(fourVec, pitcher[i,])
+      }
+      else if(pitcher$`Tilt Coordinate`[i] > .3749 && 
+         pitcher$`Tilt Coordinate`[i] < .428) {
+          twoCount = twoCount + 1
+          twoVec = rbind(twoVec,pitcher[i,])
+        } else {
+          fourCount = fourCount + 1
+          fourVec = rbind(fourVec,pitcher[i,])
+        }
+    }
+    if(fourCount > twoCount) {
+      changeup = rbind(changeup,fourVec)
+    } else {
+      changeup = rbind(changeup,twoVec)
+    }
+  }
+  
+  return(changeup)
+}
+
+fourVsTwoRight = function(x) {
+  changeup = subset(pitchersRRight, pitchersRRight$TaggedPitchType == "ChangeUp")
+  fastball = subset(pitchersRRight, pitchersRRight$TaggedPitchType == "Fastball")
+  
+  for(i in 1:length(unique(fastball$Pitcher))) {
+    base <- unique(fastball$Pitcher)[i]
+    pitcher <- fastball[fastball$Pitcher == base,]
+    twoCount = 0
+    fourCount = 0
+    fourVec = data.frame()
+    twoVec = data.frame()
+    for(i in 1:length(pitcher$TaggedPitchType)) {
+      if(is.na(pitcher$`Tilt Coordinate`[i]) == TRUE){
+        fourCount = fourCount + 1
+        fourVec = rbind(fourVec, pitcher[i,])
+      }
+        else if(pitcher$`Tilt Coordinate`[i] > 0.07 && 
+         pitcher$`Tilt Coordinate`[i] < .135) {
+          twoCount = twoCount + 1
+          twoVec = rbind(twoVec,pitcher[i,])
+        } else {
+          fourCount = fourCount + 1
+          fourVec = rbind(fourVec,pitcher[i,])
+        }
+    }
+    if(twoCount > fourCount) {
+      changeup = rbind(changeup,twoVec)
+    } else {
+      changeup = rbind(changeup,fourVec)
+    }
+  }
+  
+  return(changeup)
+}
+
+leftReduced = fourVsTwoLeft(pitchersLLeft)
+
+leftReduced
+
+rightReduced = fourVsTwoRight(pitchersRRight)
+
+rightReduced
+```
+
+
+# Find the teams for each pitcher
+
+```{r}
+team <- vector()
+teamFinder <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    base <- unique(x$Pitcher)[i]
+    pitcher <- x[x$Pitcher == base,]
+    team[i] <- unique(pitcher$PitcherTeam)[1]
+  }
+  return(team)
+}
+
+rightChangeupTeam <- teamFinder(rightReduced)
+leftChangeupTeam <- teamFinder(leftReduced)
+
+# Find Pitch Count
+
+count <- vector()
+pitchCount <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    base <- unique(x$Pitcher)[i]
+    pitcher <- x[x$Pitcher == base,]
+    count[i] <- dim(pitcher)[1]
+  }
+  return(count)
+}
+
+rightChangeupCount <- pitchCount(rightReduced)
+leftChangeupCount <- pitchCount(leftReduced)
+
+leftChangeupCount
+
+
+# Find Level within NCAA
+
+level <- vector()
+pitchLevel <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    base <- unique(x$Pitcher)[i]
+    pitcher <- x[x$Pitcher == base,]
+    level[i] <- unique(pitcher$Level)[1]
+  }
+  return(level)
+}
+
+
+rightChangeupLevel <- pitchLevel(rightReduced)
+leftChangeupLevel <- pitchLevel(leftReduced)
+
+beep(3)
+```
+
+# Horizontal Break
+```{r}
+horz <- vector()
+horzFunction <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    base <- unique(x$Pitcher)[i]
+    pitcher <- x[x$Pitcher == base,]
+    horiz <- pitcher[is.na(pitcher$HorzBreak) == FALSE,]
+    changeups <- horiz[horiz$TaggedPitchType == "ChangeUp",]
+    fastball <- horiz[horiz$TaggedPitchType == "Fastball",]
+    avgHorzFastball <- abs(mean(fastball$HorzBreak))
+    avgHorzChangeup <- abs(mean(changeups$HorzBreak))
+    if(is.na(avgHorzChangeup) == FALSE && is.na(avgHorzFastball) == FALSE){
+      horz[i] = abs(avgHorzFastball - avgHorzChangeup)
+    }
+    else{
+      horz[i] = -100 #Used to check for errors; otherwise code would break
+                     ##If any terms are -100 then a problem occured
+    }
+  }
+  return(horz)
+}
+
+rightChangeupHorz <- horzFunction(rightReduced)
+leftChangeupHorz <- horzFunction(leftReduced)
+
+rightChangeupHorz
+```
+
+
+# Velo
+
+```{r}
+velo <- vector()
+count = 0
+veloFunction <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    base <- unique(x$Pitcher)[i]
+    pitcher <- x[x$Pitcher == base,]
+    veloc <- pitcher[is.na(pitcher$RelSpeed) == FALSE,]
+    changeups = subset(veloc, veloc$TaggedPitchType == "ChangeUp")
+    fastball = subset(veloc, veloc$TaggedPitchType == "Fastball")
+    avgVeloFastball = abs(mean(fastball$RelSpeed))
+    avgChangeFastball = abs(mean(changeups$RelSpeed))
+    velo[i] = abs(avgVeloFastball - avgChangeFastball)
+  }
+  return(velo)
+}
+
+rightChangeupVelo <- veloFunction(rightReduced)
+leftChangeupVelo <- veloFunction(leftReduced)
+
+rightChangeupVelo
+```
+
+# IVB (No Bucket)
+
+```{r}
+IVB <- vector()
+IVBFunction <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    base <- unique(x$Pitcher)[i]
+    pitcher <- x[x$Pitcher == base,]
+    induce <- pitcher[is.na(pitcher$InducedVertBreak) == FALSE,]
+    changeups = subset(induce, induce$TaggedPitchType == "ChangeUp")
+    fastball = subset(induce, induce$TaggedPitchType == "Fastball")
+    avgIVBFastball = abs(mean(fastball$InducedVertBreak))
+    avgIVBChangeup = abs(mean(changeups$InducedVertBreak))
+    IVB[i] = abs(avgIVBFastball - avgIVBChangeup)
+  }
+  return(IVB)
+}
+
+rightChangeupIVB <- IVBFunction(rightReduced)
+leftChangeupIVB <- IVBFunction(leftReduced)
+
+rightChangeupIVB
+
+```
+
+# Extension
+```{r}
+extension <- vector()
+count = 0
+extensionFunction <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    base <- unique(x$Pitcher)[i]
+    pitcher <- x[x$Pitcher == base,]
+    exten <- pitcher[is.na(pitcher$Extension) == FALSE,]
+    changeups = subset(exten, exten$TaggedPitchType == "ChangeUp")
+    fastball = subset(exten, exten$TaggedPitchType == "Fastball")
+    avgExtenFastball = abs(mean(fastball$Extension))
+    avgExtenChangeup = abs(mean(changeups$Extension))
+    extension[i] = abs(avgExtenFastball - avgExtenChangeup)
+  }
+  return(extension)
+}
+
+rightChangeupExtension <- extensionFunction(rightReduced)
+leftChangeupExtension <- extensionFunction(leftReduced)
+
+rightChangeupExtension
+```
+
+# Percentiles for each Pitcher
+
+```{r}
+
+# Induced Vertical Break not by Bucket
+
+IVBPercentile <- vector()
+
+rightChangeupComparisonIVB <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){  #Right Handed Changeup
+    for(a in 1:101){
+      if(abs(rightChangeupIVB[i]) > allInducedVert[2,101]){
+        IVBPercentile[i] <- 100
+      }
+      else if(abs(rightChangeupIVB[i]) < allInducedVert[2,1]){
+        IVBPercentile[i] <- 0
+      }
+      else if(abs(rightChangeupIVB[i]) > allInducedVert[2,a] && abs(rightChangeupIVB[i]) < allInducedVert[2,a+1]){
+        IVBPercentile[i] <- a
+      }
+    }
+  }
+  return(IVBPercentile)
+}
+leftChangeupComparisonIVB <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){  #Left Handed Changeup
+    for(a in 1:101){
+      if(abs(leftChangeupIVB[i]) > allInducedVert[1,101]){
+        IVBPercentile[i] <- 100
+      }
+      else if(abs(leftChangeupIVB[i]) < allInducedVert[1,1]){
+        IVBPercentile[i] <- 0
+      }
+      else if(leftChangeupIVB[i] > allInducedVert[1,a] && leftChangeupIVB[i] < allInducedVert[1,a+1]){
+        IVBPercentile[i] <- a
+      }
+    }
+  }
+  return(IVBPercentile)
+}
+
+#Create Vector of Percentiles
+
+rightChangeupIVBPercentile <- rightChangeupComparisonIVB(rightReduced)
+leftChangeupIVBPercentile <- leftChangeupComparisonIVB(leftReduced)
+
+rightChangeupIVBPercentile
+leftChangeupIVBPercentile
+```
+
+```{r}
+# Horizontal Break
+
+horzPercentile <- vector()
+
+rightChangeupComparisonHorz <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){  #Right Handed Changeup
+    for(a in 1:101){
+      if(abs(rightChangeupHorz[i]) < allHorizontal[2,1]){
+        horzPercentile[i] <- 0
+      }
+      else if(abs(rightChangeupHorz[i]) > allHorizontal[2,101]){
+        horzPercentile[i] <- 100
+      }
+      else if(abs(rightChangeupHorz[i]) > allHorizontal[2,a] && abs(rightChangeupHorz[i]) < allHorizontal[2,a+1]){
+        horzPercentile[i] <- a
+      }
+    }
+  }
+  return(horzPercentile)
+}
+
+leftChangeupComparisonHorz <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){  #Left Handed Slider
+    for(a in 1:101){
+      if(abs(leftChangeupHorz[i]) > allHorizontal[1,101]){
+        horzPercentile[i] <- 100
+      }
+      else if(abs(leftChangeupHorz[i]) < allHorizontal[1,1]){
+        horzPercentile[i] <- 0
+      }
+      else if(abs(leftChangeupHorz[i]) > allHorizontal[1,a] && abs(leftChangeupHorz[i]) < allHorizontal[1,a+1]){
+        horzPercentile[i] <- a
+    }
+    }
+  }
+  return(horzPercentile)
+}
+
+rightChangeupHorzPercentile <- rightChangeupComparisonHorz(rightReduced)
+leftChangeupHorzPercentile <- leftChangeupComparisonHorz(leftReduced)
+
+rightChangeupHorzPercentile
+leftChangeupHorzPercentile
+```
+
+```{r}
+# Velocity
+
+# Find Adjusted Velocity
+adjustedVelo <- vector()
+
+rightChangeupAdjustedVeloFunc <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){  #Right Handed Changeup
+    adjustedVelo[i] <- rightChangeupVelo[i] + (1.6/12)*(rightChangeupExtension[i] - allExtension[2,50])
+  }
+  return(adjustedVelo)
+}
+
+leftChangeupAdjustedVeloFunc <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){  #Left Handed Changeup
+    adjustedVelo[i] <- leftChangeupVelo[i] + (1.6/12)*(leftChangeupExtension[i] - allExtension[1,50])
+  }
+  return(adjustedVelo)
+}
+
+rightChangeupAdjustVelo <- rightChangeupAdjustedVeloFunc(rightReduced)
+leftChangeupAdjustVelo <- leftChangeupAdjustedVeloFunc(leftReduced)
+
+
+# Find percentile for adjusted velocity
+veloPercentile <- vector()
+
+rightChangeupComparisonVelo <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){  #Right Handed Slider
+    for(a in 1:101){
+      if(rightChangeupAdjustVelo[i] > allVelo[2,101]){
+        veloPercentile[i] <- 100
+      }
+      else if(rightChangeupAdjustVelo[i] < allVelo[2,1]){
+        veloPercentile[i] <- 0
+      }
+      else if(rightChangeupAdjustVelo[i] > allVelo[2,a] && rightChangeupAdjustVelo[i] < allVelo[2,a+1]){
+        veloPercentile[i] <- a
+      }
+    }
+  }
+  return(veloPercentile)
+}
+
+leftChangeupComparisonVelo <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){  #Left Handed Changeup
+    for(a in 1:101){
+      if(leftChangeupAdjustVelo[i] > allVelo[1,101]){
+        veloPercentile[i] <- 100
+      }
+      else if(leftChangeupAdjustVelo[i] < allVelo[1,1]){
+        veloPercentile[i] <- 0
+      }
+      else if(leftChangeupAdjustVelo[i] > allVelo[1,a] && leftChangeupAdjustVelo[i] < allVelo[1,a+1]){
+        veloPercentile[i] <- a
+      }
+    }
+  }
+  return(veloPercentile)
+}
+
+rightChangeupVeloPercentile <- rightChangeupComparisonVelo(rightReduced)
+leftChangeupVeloPercentile <- leftChangeupComparisonVelo(leftReduced)
+
+rightChangeupVeloPercentile
+
+beep(3)
+```
+
+# Finding Means and SD
+
+```{r}
+# Horizontal Break
+rightChangeupHorzMean = 4.9228436
+leftChangeupHorzmean = 4.9061587
+
+rightChangeupHorzSD = 3.539807
+leftChangeupHorzSD = 3.583949
+
+
+# Velocity
+
+rightChangeupVeloMean = 8.1829038
+leftChangeupVeloMean = 8.5308453
+
+rightChangeupVeloSD = 2.536039
+leftChangeupVeloSD = 2.669013
+
+
+# IVB
+rightChangeupIVBMean = 6.9055331
+leftChangeupIVBMean = 8.8985998
+
+rightChangeupIVBSD = 5.471703
+leftChangeupIVBSD = 4.9660645
+```
+
+# Create a Stuff Value: Changeup
+
+```{r}
+stuffVect <- vector()
+
+RightSStuff <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    stuffVect[i] <- (.35 * (1+ ((rightChangeupAdjustVelo[i] - rightChangeupVeloMean) / rightChangeupVeloSD))) + (.35 * (1+((rightChangeupHorz[i] - rightChangeupHorzMean) / rightChangeupHorzSD))) + (.3 * (1+((rightChangeupIVB[i] - rightChangeupIVBMean) / rightChangeupIVBSD)))
+  }
+  return(stuffVect)
+}
+
+rightChangeupStuff <- RightSStuff(rightReduced)
+
+rightChangeupStuff
+
+```
+
+```{r}
+stuffVect <- vector()
+
+LeftSStuff <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    stuffVect[i] <- (.35 * (1+ ((leftChangeupAdjustVelo[i] - leftChangeupVeloMean) / leftChangeupVeloSD))) + (.35 * (1+((leftChangeupHorz[i] - leftChangeupHorzmean) / leftChangeupHorzSD))) + (.3 * (1+((leftChangeupIVB[i] - leftChangeupIVBMean) / leftChangeupIVBSD)))
+  }
+  return(stuffVect)
+}
+
+leftChangeupStuff <- LeftSStuff(leftReduced)
+
+leftChangeupStuff
+
+beep(3)
+```
+
+# Create a Stuff+ Value
+
+```{r}
+stuffPlusVect <- vector()
+
+stuffPlusFunction <- function(x){
+  for(i in 1:length(x)){
+    stuffPlusVect[i] <- 100*(x[i])
+  }
+  return(stuffPlusVect)
+}
+
+rightChangeupStuffPlus <- stuffPlusFunction(rightChangeupStuff)
+leftChangeupStuffPlus <- stuffPlusFunction(leftChangeupStuff)
+
+```
+
+# Export Stuff+ Values
+
+```{r}
+#Right Handed Changeup
+rightChangeupStuffPlusTable <- mapply(c, unique(rightReduced$Pitcher), rightChangeupTeam, rightChangeupLevel, rightChangeupCount, rightChangeupVelo, rightChangeupAdjustVelo, rightChangeupHorz, rightChangeupIVB, rightChangeupVeloPercentile, rightChangeupHorzPercentile, rightChangeupIVBPercentile, rightChangeupStuffPlus, SIMPLIFY = FALSE)
+
+write.csv(rightChangeupStuffPlusTable, "2022 NCAA Right Handed Changeup Stuff+ 2.csv")
+
+#Left Handed Changeup
+leftChangeupStuffPlusTable <- mapply(c, unique(leftReduced$Pitcher), leftChangeupTeam, leftChangeupLevel, leftChangeupCount, leftChangeupVelo, leftChangeupAdjustVelo, leftChangeupHorz, leftChangeupIVB, leftChangeupVeloPercentile, leftChangeupHorzPercentile, leftChangeupIVBPercentile, leftChangeupStuffPlus, SIMPLIFY = FALSE)
+
+write.csv(leftChangeupStuffPlusTable, "2022 NCAA Left Handed Changeup Stuff+ 2.csv")
+
+beep(3)
+```
