@@ -1,0 +1,994 @@
+---
+title: "NCAA Fastball Stuff+ Version 8 Part 2"
+author: "Alexander Harriman"
+date: '2022-05-23'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load Percentiles
+
+```{r}
+library(beepr)
+
+allVelo <- read.csv("NCAA Velocity Percentiles for all Fastballs.csv")
+allInducedVertBucket <- read.csv("NCAA Induced Vertical Percentiles by Bucket all Fastballs.csv")
+allInducedVert <- read.csv("NCAA Induced Vertical Percentiles for all Fastballs.csv")
+allHorizontal <- read.csv("NCAA Horizontal Break Percentiles for all Fastballs.csv")
+allExtension <- read.csv("NCAA Extension Percentiles for all Fastballs.csv")
+
+allVelo
+allInducedVertBucket
+allInducedVert
+allHorizontal
+allExtension
+```
+
+# Insert ACC Pitcher Files
+
+```{r, warning = FALSE}
+library(readxl)
+acc2022 <- read_excel("Reduced 2022 Fastballs (5-20, M-Z).xlsx")
+
+# Filter by Minimum Speed
+acc2022 <- acc2022[acc2022$RelSpeed > 85.999,]
+
+
+names <- unique(acc2022$Pitcher)
+
+#There are 4293 pitchers in this dataset.
+
+##We will filter them down by fastball type
+
+beep(3)
+```
+
+# Fastball Filtering
+
+```{r}
+# Separating lefties and righties
+
+accRight <- acc2022[acc2022$PitcherThrows == "Right",]
+accLeft <- acc2022[acc2022$PitcherThrows == "Left",]
+
+dim(accRight)
+accRight$`Pitch Assignment`[8420]
+
+# Using tilt to separate four-seamers and two-seamers
+
+rightTilt <- function(){
+  for(i in 1:dim(accRight)[1]){
+    if(is.na(accRight$`Tilt Coordinate`[i]) == TRUE){
+      accRight$`Pitch Assignment`[i] <<- "None"
+    }
+    else if(accRight$`Tilt Coordinate`[i] > 0.07 && accRight$`Tilt Coordinate`[i] < .135){
+      accRight$`Pitch Assignment`[i] <<- "Right Two-Seam"
+    }
+    else if(accRight$`Tilt Coordinate`[i] > 0.04  && accRight$`Tilt Coordinate`[i] < .065){
+      accRight$`Pitch Assignment`[i] <<- "Right Four-Seam"
+    }
+    else if(accRight$`Tilt Coordinate`[i] > 0.499 && accRight$`Tilt Coordinate`[i] < .532){
+      accRight$`Pitch Assignment`[i] <<- "Right Four-Seam"
+    }
+  }
+  return(accRight$`Pitch Assignment`)
+}
+
+rightTilt()
+
+accRightFour <- accRight[accRight$`Pitch Assignment` == "Right Four-Seam",]
+accRightTwo <- accRight[accRight$`Pitch Assignment` == "Right Two-Seam",]
+
+
+#Filter Out Bad Data
+accRightTwo <- accRightTwo[accRightTwo$Pitcher != "Maxwell, Zachary",]
+
+accRightTwo <- accRightTwo[accRightTwo$Pitcher != "Stohr, Ryan",]
+accRightTwo <- accRightTwo[is.na(accRightTwo$Pitcher) == FALSE,]
+
+accRightFour <- accRightFour[is.na(accRightFour$Pitcher) == FALSE,]
+
+dim(accRightFour)
+dim(accRightTwo)
+
+leftTilt <- function(){
+  for(i in 1:dim(accLeft)[1]){
+    if(is.na(accLeft$`Tilt Coordinate`[i]) == TRUE){
+      accLeft$`Pitch Assignment`[i] <<- "None"
+    }
+    else if(accLeft$`Tilt Coordinate`[i] > .3749 && accLeft$`Tilt Coordinate`[i] < .428){
+      accLeft$`Pitch Assignment`[i] <<- "Left Two-Seam"
+    }
+    else if(accLeft$`Tilt Coordinate`[i] >  .437 && accLeft$`Tilt Coordinate`[i] < 0.501){
+      accLeft$`Pitch Assignment`[i] <<- "Left Four-Seam"
+    }
+  }
+  return(accRight$`Pitch Assignment`)
+}
+
+leftTilt()
+
+
+accLeftFour <- accLeft[accLeft$`Pitch Assignment` == "Left Four-Seam",]
+accLeftTwo <- accLeft[accLeft$`Pitch Assignment` == "Left Two-Seam",]
+dim(accLeftFour)
+dim(accLeftTwo)
+```
+
+```{r}
+# Set Pitch Minimum at 20 Pitches:
+
+pitcherClearLF <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    x <- accLeftFour
+    base <- unique(x$Pitcher)[i]
+    if(length(x[x$Pitcher == base,]$PitchNo) < 20){
+      accLeftFour <<- subset(x, x$Pitcher != base)
+    }
+  }
+  return(accLeftFour)
+}
+
+pitcherClearLT <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    x <- accLeftTwo
+    base <- unique(x$Pitcher)[i]
+    if(length(x[x$Pitcher == base,]$PitchNo) < 20){
+      accLeftTwo <<- subset(x, x$Pitcher != base)
+    }
+  }
+  return(accLeftTwo)
+}
+
+pitcherClearRF <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    x <- accRightFour
+    base <- unique(x$Pitcher)[i]
+    if(length(x[x$Pitcher == base,]$PitchNo) < 20){
+      accRightFour <<- subset(x, x$Pitcher != base)
+    }
+  }
+  return(accRightFour)
+}
+
+pitcherClearRT <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    x <- accRightTwo
+    base <- unique(x$Pitcher)[i]
+    if(length(x[x$Pitcher == base,]$PitchNo) < 20){
+      accRightTwo <<- subset(x, x$Pitcher != base)
+    }
+  }
+  return(accRightTwo)
+}
+
+dim(accLeftFour)
+pitcherClearLF(accLeftFour)
+dim(accLeftFour)
+
+dim(accRightTwo)
+pitcherClearRT(accRightTwo)
+dim(accRightTwo)
+
+dim(accRightFour)
+pitcherClearRF(accRightFour)
+dim(accRightFour)
+
+dim(accLeftTwo)
+pitcherClearLT(accLeftTwo)
+dim(accLeftTwo)
+
+beep(3)
+```
+
+
+
+
+# Find Average Release Height for All Pitchers
+```{r}
+# Find the number of unique pitchers in each of the four types
+
+rffName <- unique(accRightFour$Pitcher) #3175 pitchers
+lffName <- unique(accLeftFour$Pitcher) #561 pitchers
+rtfName <- unique(accRightTwo$Pitcher) #683 pitchers
+ltfName <- unique(accLeftTwo$Pitcher) #205 pitchers
+
+length(rffName)
+length(lffName)
+length(rtfName)
+length(ltfName)
+
+
+# Find the teams for each pitcher
+team <- vector()
+teamFinder <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    base <- unique(x$Pitcher)[i]
+    pitcher <- x[x$Pitcher == base,]
+    team[i] <- unique(pitcher$PitcherTeam)[1]
+  }
+  return(team)
+}
+
+rightFourTeam <- teamFinder(accRightFour)
+leftFourTeam <- teamFinder(accLeftFour)
+rightTwoTeam <- teamFinder(accRightTwo)
+leftTwoTeam <- teamFinder(accLeftTwo)
+
+# Find Pitch Count
+
+count <- vector()
+pitchCount <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    base <- unique(x$Pitcher)[i]
+    pitcher <- x[x$Pitcher == base,]
+    count[i] <- dim(pitcher)[1]
+  }
+  return(count)
+}
+
+rightFourCount <- pitchCount(accRightFour)
+leftFourCount <- pitchCount(accLeftFour)
+rightTwoCount <- pitchCount(accRightTwo)
+leftTwoCount <- pitchCount(accLeftTwo)
+
+rightFourCount
+leftFourCount
+rightTwoCount
+leftTwoCount
+
+
+# Find Level within NCAA
+
+level <- vector()
+pitchLevel <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    base <- unique(x$Pitcher)[i]
+    pitcher <- x[x$Pitcher == base,]
+    level[i] <- unique(pitcher$Level)[1]
+  }
+  return(level)
+}
+
+
+rightFourLevel <- pitchLevel(accRightFour)
+leftFourLevel <- pitchLevel(accLeftFour)
+rightTwoLevel <- pitchLevel(accRightTwo)
+leftTwoLevel <- pitchLevel(accLeftTwo)
+
+beep(3)
+```
+
+
+
+
+```{r}
+# Unique Release Height for the Four-Seamers, needed for buckets
+
+RH <- vector()
+relHeight <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    base <- unique(x$Pitcher)[i]
+    pitcher <- x[x$Pitcher == base,]
+    height <- pitcher[is.na(pitcher$RelHeight) == FALSE,]
+    RH[i] <- mean(height$RelHeight)
+  }
+  return(RH)
+}
+
+rightFourHeight <- relHeight(accRightFour)
+leftFourHeight <- relHeight(accLeftFour)
+rightTwoHeight <- relHeight(accRightTwo)
+leftTwoHeight <- relHeight(accLeftTwo)
+
+rightFourHeight
+```
+
+
+# Average Horizontal Break
+
+```{r}
+horz <- vector()
+horzFunction <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    base <- unique(x$Pitcher)[i]
+    pitcher <- x[x$Pitcher == base,]
+    horiz <- pitcher[is.na(pitcher$HorzBreak) == FALSE,]
+    horz[i] <- abs(mean(horiz$HorzBreak))
+  }
+  return(horz)
+}
+rightFourHorz <- horzFunction(accRightFour)
+rightTwoHorz <- horzFunction(accRightTwo)
+leftFourHorz <- horzFunction(accLeftFour)
+leftTwoHorz <- horzFunction(accLeftTwo)
+
+rightFourHorz
+```
+
+# Average Velo
+
+```{r}
+velo <- vector()
+veloFunction <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    base <- unique(x$Pitcher)[i]
+    pitcher <- x[x$Pitcher == base,]
+    veloc <- pitcher[is.na(pitcher$RelSpeed) == FALSE,]
+    velo[i] <- abs(mean(veloc$RelSpeed))
+  }
+  return(velo)
+}
+
+rightFourVelo <- veloFunction(accRightFour)
+rightTwoVelo <- veloFunction(accRightTwo)
+leftFourVelo <- veloFunction(accLeftFour)
+leftTwoVelo <- veloFunction(accLeftTwo)
+
+rightFourVelo
+```
+
+# Average IVB (No Bucket)
+
+```{r}
+IVB <- vector()
+IVBFunction <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    base <- unique(x$Pitcher)[i]
+    pitcher <- x[x$Pitcher == base,]
+    induce <- pitcher[is.na(pitcher$InducedVertBreak) == FALSE,]
+    IVB[i] <- abs(mean(induce$InducedVertBreak))
+  }
+  return(IVB)
+}
+
+rightFourIVB <- IVBFunction(accRightFour)
+rightTwoIVB <- IVBFunction(accRightTwo)
+leftFourIVB <- IVBFunction(accLeftFour)
+leftTwoIVB <- IVBFunction(accLeftTwo)
+
+rightTwoIVB
+```
+
+# Average Extension
+```{r}
+extension <- vector()
+extensionFunction <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    base <- unique(x$Pitcher)[i]
+    pitcher <- x[x$Pitcher == base,]
+    exten <- pitcher[is.na(pitcher$Extension) == FALSE,]
+    extension[i] <- mean(exten$Extension)
+  }
+  return(extension)
+}
+
+rightFourExtension <- extensionFunction(accRightFour)
+rightTwoExtension <- extensionFunction(accRightTwo)
+leftFourExtension <- extensionFunction(accLeftFour)
+leftTwoExtension <- extensionFunction(accLeftTwo)
+
+rightFourExtension
+```
+
+# Finding Percentile Value for Each Pitcher
+
+For each of these functions, x will represent the row value, which is determined by the bucket.
+
+```{r}
+# Induced Vertical Break by Bucket 
+## Only for Four-Seamers
+
+bucket <- vector()
+rightBucketFunction <- function(){
+  for(i in 1:length(unique(accRightFour$Pitcher))){
+    if(rightFourHeight[i] > 4.5 && rightFourHeight[i] < 4.7){
+      bucket[i] <- 1
+    }
+    else if(rightFourHeight[i] > 4.7 && rightFourHeight[i] < 4.9){
+      bucket[i] <- 2
+    }
+    else if(rightFourHeight[i] > 4.9 && rightFourHeight[i] < 5.1){
+      bucket[i] <- 3
+    }
+    else if(rightFourHeight[i] > 5.1 && rightFourHeight[i] < 5.3){
+      bucket[i] <- 4
+    }
+    else if(rightFourHeight[i] > 5.3 && rightFourHeight[i] < 5.5){
+      bucket[i] <- 5
+    }
+    else if(rightFourHeight[i] > 5.5 && rightFourHeight[i] < 5.7){
+      bucket[i] <- 6
+    }
+    else if(rightFourHeight[i] > 5.7 && rightFourHeight[i] < 5.9){
+      bucket[i] <- 7
+    }
+    else if(rightFourHeight[i] > 5.9 && rightFourHeight[i] < 6.1){
+      bucket[i] <- 8
+    }
+    else if(rightFourHeight[i] > 6.1 && rightFourHeight[i] < 6.3){
+      bucket[i] <- 9
+    }
+    else if(rightFourHeight[i] > 6.3 && rightFourHeight[i] < 6.5){
+      bucket[i] <- 10
+    }
+    else if(rightFourHeight[i] > 6.5 && rightFourHeight[i] < 6.7){
+      bucket[i] <- 11
+    }
+    else if(rightFourHeight[i] > 6.7 && rightFourHeight[i] < 6.9){
+      bucket[i] <- 12
+    }
+    else if(rightFourHeight[i] < 4.5){
+      bucket[i] <- 1
+    }
+    else if(rightFourHeight[i] > 6.9){
+      bucket[i] <- 12
+    }
+  }
+  return(bucket)
+}
+
+
+leftBucketFunction <- function(){
+  for(i in 1:length(unique(accLeftFour$Pitcher))){
+    if(leftFourHeight[i] > 4.5 && leftFourHeight[i] < 4.7){
+      bucket[i] <- 25
+    }
+    else if(leftFourHeight[i] > 4.7 && leftFourHeight[i] < 4.9){
+      bucket[i] <- 26
+    }
+    else if(leftFourHeight[i] > 4.9 && leftFourHeight[i] < 5.1){
+      bucket[i] <- 27
+    }
+    else if(leftFourHeight[i] > 5.1 && leftFourHeight[i] < 5.3){
+      bucket[i] <- 28
+    }
+    else if(leftFourHeight[i] > 5.3 && leftFourHeight[i] < 5.5){
+      bucket[i] <- 29
+    }
+    else if(leftFourHeight[i] > 5.5 && leftFourHeight[i] < 5.7){
+      bucket[i] <- 30
+    }
+    else if(leftFourHeight[i] > 5.7 && leftFourHeight[i] < 5.9){
+      bucket[i] <- 31
+    }
+    else if(leftFourHeight[i] > 5.9 && leftFourHeight[i] < 6.1){
+      bucket[i] <- 32
+    }
+    else if(leftFourHeight[i] > 6.1 && leftFourHeight[i] < 6.3){
+      bucket[i] <- 33
+    }
+    else if(leftFourHeight[i] > 6.3 && leftFourHeight[i] < 6.5){
+      bucket[i] <- 34
+    }
+    else if(leftFourHeight[i] > 6.5 && leftFourHeight[i] < 6.7){
+      bucket[i] <- 35
+    }
+    else if(leftFourHeight[i] > 6.7 && leftFourHeight[i] < 6.9){
+      bucket[i] <- 36
+    }
+    else if(leftFourHeight[i] < 4.5){
+      bucket[i] <- 25
+    }
+    else if(leftFourHeight[i] > 6.9){
+      bucket[i] <- 36
+    }
+  }
+  return(bucket)
+}
+
+rightFourBucket <- rightBucketFunction()
+leftFourBucket <- leftBucketFunction()
+
+beep(3)
+```
+
+```{r}
+IVBBucketPercentileVect <- vector()
+rightComparisonIVBBucket <- function(x){
+  for(a in 1:length(unique(x$Pitcher))){
+    for(j in 1:101){
+    if(rightFourIVB[a] > allInducedVertBucket[rightFourBucket[a],j] && rightFourIVB[a] < allInducedVertBucket[rightFourBucket[a],j+1]){
+        IVBBucketPercentileVect[a] <- j
+    }
+  }
+  }
+  return(IVBBucketPercentileVect)
+}
+
+
+leftComparisonIVBBucket <- function(x){
+  for(a in 1:length(unique(x$Pitcher))){
+    for(j in 1:101){
+    if(leftFourIVB[a] > allInducedVertBucket[leftFourBucket[a],j] && leftFourIVB[a] < allInducedVertBucket[leftFourBucket[a],j+1]){
+        IVBBucketPercentileVect[a] <- j
+    }
+  }
+  }
+  return(IVBBucketPercentileVect)
+}
+
+# Create Vector of Percentiles 
+
+rightIVBBucketPercentile <- rightComparisonIVBBucket(accRightFour)
+leftIVBBucketPercentile <- leftComparisonIVBBucket(accLeftFour)
+
+
+rightIVBBucketPercentile[93]
+```
+
+
+```{r}
+# Induced Vertical Break not by Bucket
+rightTwoIVB
+IVBPercentile <- vector()
+
+rightFourComparisonIVB <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){  #Right Handed Four Seamer
+    for(a in 1:101){
+      if(rightFourIVB[i] > allInducedVert[1,a] && rightFourIVB[i] < allInducedVert[1,a+1]){
+        IVBPercentile[i] <- a
+      }
+    }
+  }
+  return(IVBPercentile)
+}
+rightTwoComparisonIVB <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){  #Right Handed Two Seamer
+    for(a in 1:101){
+      if(rightTwoIVB[i] > allInducedVert[2,101]){
+        IVBPercentile[i] <- 100
+      }
+      else if(rightTwoIVB[i] > allInducedVert[2,a] && rightTwoIVB[i] < allInducedVert[2,a+1]){
+        IVBPercentile[i] <- a
+      }
+    }
+  }
+  return(IVBPercentile)
+}
+leftFourComparisonIVB <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){  #Left Handed Four Seamer
+    for(a in 1:101){
+      if(leftFourIVB[i] > allInducedVert[3,a] && leftFourIVB[i] < allInducedVert[3,a+1]){
+        IVBPercentile[i] <- a
+      }
+    }
+  }
+  return(IVBPercentile)
+}
+leftTwoComparisonIVB <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){  #Left Handed Two Seamer
+    for(a in 1:101){
+      if(leftTwoIVB[i] > allInducedVert[4,a] && leftTwoIVB[i] < allInducedVert[4,a+1]){
+        IVBPercentile[i] <- a
+      }
+    }
+  }
+  return(IVBPercentile)
+}
+ 
+
+#Create Vector of Percentiles
+
+## For the Two-Seamers, Flip the Percentiles
+
+rightFourIVBPercentile <- rightFourComparisonIVB(accRightFour)
+rightTwoIVBPercentile <- rightTwoComparisonIVB(accRightTwo)
+leftFourIVBPercentile <- leftFourComparisonIVB(accLeftFour)
+leftTwoIVBPercentile <- leftTwoComparisonIVB(accLeftTwo)
+
+
+#Flip the two-seamer percentiles:
+
+percentileFlip <- function(x){
+  for(i in 1:length(x)){
+    IVBPercentile[i] <- 100 - x[i]
+  }
+  return(IVBPercentile)
+}
+
+rightTwoIVBPercentileYes <- percentileFlip(rightTwoIVBPercentile)
+leftTwoIVBPercentileYes <- percentileFlip(leftTwoIVBPercentile)
+
+rightFourIVBPercentile
+
+rightTwoIVBPercentileYes
+
+leftTwoIVBPercentile
+leftTwoIVBPercentileYes
+
+beep(3)
+```
+
+```{r}
+# Horizontal Break
+
+horzPercentile <- vector()
+
+rightFourComparisonHorz <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){  #Left Handed Four Seamer
+    for(a in 1:101){
+      if(rightFourHorz[i] > allHorizontal[1,a] && rightFourHorz[i] < allHorizontal[1,a+1]){
+        horzPercentile[i] <- a
+      }
+    }
+  }
+  return(horzPercentile)
+}
+rightTwoComparisonHorz <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){  #Left Handed Four Seamer
+    for(a in 1:101){
+      if(rightTwoHorz[i] > allHorizontal[2,a] && rightTwoHorz[i] < allHorizontal[2,a+1]){
+        horzPercentile[i] <- a
+      }
+    }
+  }
+  return(horzPercentile)
+}
+leftFourComparisonHorz <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){  #Left Handed Four Seamer
+    for(a in 1:101){
+      if(leftFourHorz[i] > allHorizontal[3,a] && leftFourHorz[i] < allHorizontal[3,a+1]){
+        horzPercentile[i] <- a
+      }
+    }
+  }
+  return(horzPercentile)
+}
+leftTwoComparisonHorz <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){  #Left Handed Four Seamer
+    for(a in 1:101){
+      if(leftTwoHorz[i] > allHorizontal[4,a] && leftTwoHorz[i] < allHorizontal[4,a+1]){
+        horzPercentile[i] <- a
+      }
+    }
+  }
+  return(horzPercentile)
+}
+
+
+rightFourHorzPercentile <- rightFourComparisonHorz(accRightFour)
+rightTwoHorzPercentile <- rightTwoComparisonHorz(accRightTwo)
+leftFourHorzPercentile <- leftFourComparisonHorz(accLeftFour)
+leftTwoHorzPercentile <- leftTwoComparisonHorz(accLeftTwo)
+
+rightFourHorzPercentile
+```
+
+# Adjusting the Velocity by Extension
+
+```{r}
+veloPercentile <- vector()
+
+rightFourComparisonVelo <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){  #Left Handed Four Seamer
+    for(a in 1:101){
+      if(rightFourAdjustVelo[i] > allVelo[1,a] && rightFourAdjustVelo[i] < allVelo[1,a+1]){
+        veloPercentile[i] <- a
+      }
+    }
+  }
+  return(veloPercentile)
+}
+rightTwoComparisonVelo <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){  #Left Handed Four Seamer
+    for(a in 1:101){
+      if(rightTwoAdjustVelo[i] > allVelo[2,101]){
+        veloPercentile[i] <- 100
+      }
+      else if(rightTwoAdjustVelo[i] > allVelo[2,a] && rightTwoAdjustVelo[i] < allVelo[2,a+1]){
+        veloPercentile[i] <- a
+      }
+    }
+  }
+  return(veloPercentile)
+}
+leftFourComparisonVelo <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){  #Left Handed Four Seamer
+    for(a in 1:101){
+      if(leftFourAdjustVelo[i] > allVelo[3,a] && leftFourAdjustVelo[i] < allVelo[3,a+1]){
+        veloPercentile[i] <- a
+      }
+    }
+  }
+  return(veloPercentile)
+}
+leftTwoComparisonVelo <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){  #Left Handed Four Seamer
+    for(a in 1:101){
+      if(leftTwoAdjustVelo[i] > allVelo[4,a] && leftTwoAdjustVelo[i] < allVelo[4,a+1]){
+        veloPercentile[i] <- a
+      }
+    }
+  }
+  return(veloPercentile)
+}
+
+adjustedVelo <- vector()
+
+rightFourAdjustedVelo <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){  #Left Handed Four Seamer
+    adjustedVelo[i] <- rightFourVelo[i] + (1.6/12)*(rightFourExtension[i] - allExtension[1,50])
+  }
+  return(adjustedVelo)
+}
+rightTwoAdjustedVelo <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){  #Left Handed Four Seamer
+    adjustedVelo[i] <- rightTwoVelo[i] + (1.6/12)*(rightTwoExtension[i] - allExtension[2,50])
+  }
+  return(adjustedVelo)
+}
+leftFourAdjustedVelo <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){  #Left Handed Four Seamer
+    adjustedVelo[i] <- leftFourVelo[i] + (1.6/12)*(leftFourExtension[i] - allExtension[3,50])
+  }
+  return(adjustedVelo)
+}
+leftTwoAdjustedVelo <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){  #Left Handed Four Seamer
+    adjustedVelo[i] <- leftTwoVelo[i] + (1.6/12)*(leftTwoExtension[i] - allExtension[4,50])
+  }
+  return(adjustedVelo)
+}
+
+rightFourAdjustVelo <- rightFourAdjustedVelo(accRightFour)
+rightTwoAdjustVelo <- rightTwoAdjustedVelo(accRightTwo)
+leftFourAdjustVelo <- leftFourAdjustedVelo(accLeftFour)
+leftTwoAdjustVelo <- leftTwoAdjustedVelo(accLeftTwo)
+
+rightFourAdjustVelo
+rightTwoAdjustVelo
+
+max(rightTwoAdjustVelo)
+
+
+rightFourVeloPercentile <- rightFourComparisonVelo(accRightFour)
+rightTwoVeloPercentile <- rightTwoComparisonVelo(accRightTwo)
+leftFourVeloPercentile <- leftFourComparisonVelo(accLeftFour)
+leftTwoVeloPercentile <- leftTwoComparisonVelo(accLeftTwo)
+
+rightFourVeloPercentile
+leftFourVeloPercentile[15]
+
+leftFourAdjustVelo[15]
+
+leftFourAdjustVelo[22]
+
+beep(3)
+```
+
+# Find Mean and Standard Deviation for Metrics
+
+```{r}
+rightFourVeloMean <- mean(accRightFour$RelSpeed)
+rightTwoVeloMean <- mean(accRightTwo$RelSpeed)
+leftFourVeloMean <- mean(accLeftFour$RelSpeed)
+leftTwoVeloMean <- mean(accLeftTwo$RelSpeed)
+
+rightFourVeloSD <- sd(accRightFour$RelSpeed)
+rightTwoVeloSD <- sd(accRightTwo$RelSpeed)
+leftFourVeloSD <- sd(accLeftFour$RelSpeed)
+leftTwoVeloSD <- sd(accLeftTwo$RelSpeed)
+
+rightFourHorzMean <- abs(mean(accRightFour$HorzBreak))
+rightTwoHorzMean <- abs(mean(accRightTwo$HorzBreak))
+leftFourHorzMean <- abs(mean(accLeftFour$HorzBreak))
+leftTwoHorzMean <- abs(mean(accLeftTwo$HorzBreak))
+
+rightFourHorzSD <- abs(sd(accRightFour$HorzBreak))
+rightTwoHorzSD <- abs(sd(accRightTwo$HorzBreak))
+leftFourHorzSD <- abs(sd(accLeftFour$HorzBreak))
+leftTwoHorzSD <- abs(sd(accLeftTwo$HorzBreak))
+
+rightFourIVBMean <- mean(accRightFour$InducedVertBreak)
+rightTwoIVBMean <- mean(accRightTwo$InducedVertBreak)
+leftFourIVBMean <- mean(accLeftFour$InducedVertBreak)
+leftTwoIVBMean <- mean(accLeftTwo$InducedVertBreak)
+
+rightFourIVBSD <- sd(accRightFour$InducedVertBreak)
+rightTwoIVBSD <- sd(accRightTwo$InducedVertBreak)
+leftFourIVBSD <- sd(accLeftFour$InducedVertBreak)
+leftTwoIVBSD <- sd(accLeftTwo$InducedVertBreak)
+
+leftTwoIVBMean
+leftTwoHorzMean
+leftTwoVeloMean
+
+leftTwoIVBSD
+leftTwoHorzSD
+leftTwoVeloSD
+
+leftFourIVBMean
+leftFourHorzMean
+leftFourVeloMean
+
+leftFourIVBSD
+leftFourHorzSD
+leftFourVeloSD
+
+rightFourIVBMean
+rightFourHorzMean
+rightFourVeloMean
+
+rightFourIVBSD
+rightFourHorzSD
+rightFourVeloSD
+
+rightTwoIVBMean
+rightTwoHorzMean
+rightTwoVeloMean
+
+rightTwoIVBSD
+rightTwoHorzSD
+rightTwoVeloSD
+```
+
+## Input Average Induced Vert by Bucket
+
+```{r}
+rightFourBucketMean <- c(15.40361,
+15.2989,
+15.41919,
+15.70848,
+16.47215,
+16.99061,
+17.53288,
+17.83591,
+18.43497,
+18.73269,
+19.50746,
+19.13517
+)
+leftFourBucketMean <- c(15.31076,
+15.21698,
+15.55029,
+15.81432,
+16.4152,
+16.97381,
+17.48811,
+17.82028,
+18.35664,
+18.65516,
+19.40202,
+19.43625
+)
+
+rightFourBucketSD <- c(3.86845,
+3.157976,
+2.983433,
+2.964166,
+3.026137,
+3.08061,
+3.105723,
+3.246047,
+3.289604,
+3.256543,
+3.622131,
+3.622383
+)
+leftFourBucketSD <- c(3.779763,
+3.129162,
+2.947515,
+2.973885,
+3.037003,
+3.084712,
+3.099824,
+3.233041,
+3.286215,
+3.225889,
+3.577994,
+3.550872
+)
+```
+
+# Create a Stuff Value: Four Seamers
+
+```{r}
+stuffVect <- vector()
+
+RightFourStuff <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    stuffVect[i] <- (.45 * (1+ ((rightFourAdjustVelo[i] - rightFourVeloMean) / rightFourVeloSD))) + (.15 * (1+((rightFourHorz[i] - rightFourHorzMean) / rightFourHorzSD))) + (.3 * (1+((rightFourIVB[i] - rightFourIVBMean) / rightFourIVBSD))) + (.1 * (1+((rightFourIVB[i] - rightFourBucketMean[rightFourBucket[i]]) / rightFourBucketSD[rightFourBucket[i]])))
+  }
+  return(stuffVect)
+}
+
+rightFourSeamStuff <- RightFourStuff(accRightFour)
+
+rightFourSeamStuff
+
+```
+
+```{r}
+stuffVect <- vector()
+
+LeftFourStuff <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    stuffVect[i] <- (.45 * (1+ ((leftFourAdjustVelo[i] - leftFourVeloMean) / leftFourVeloSD))) + (.15 * (1+((leftFourHorz[i] - leftFourHorzMean) / leftFourHorzSD))) + (.3 * (1+((leftFourIVB[i] - leftFourIVBMean) / leftFourIVBSD))) + (.1 * (1+((leftFourIVB[i] - leftFourBucketMean[leftFourBucket[i] - 24]) / leftFourBucketSD[leftFourBucket[i] - 24])))
+  }
+  return(stuffVect)
+}
+
+leftFourSeamStuff <- LeftFourStuff(accLeftFour)
+
+leftFourSeamStuff
+
+beep(3)
+```
+
+# Create a Stuff Value: Two-Seamers
+```{r}
+stuffVect <- vector()
+rightTwoStuffFunction <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    stuffVect[i] <- (.5 * (1+ ((rightTwoAdjustVelo[i] - rightTwoVeloMean) / rightTwoVeloSD))) + (.25 * (1+((rightTwoHorz[i] - rightTwoHorzMean) / rightTwoHorzSD))) + (.25 * (1+(-(rightTwoIVB[i] - rightTwoIVBMean) / rightTwoIVBSD)))
+  }
+  return(stuffVect)
+}
+
+rightTwoStuff <- rightTwoStuffFunction(accRightTwo)
+
+
+leftTwoStuffFunction <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    stuffVect[i] <- (.5 * (1+ ((leftTwoAdjustVelo[i] - leftTwoVeloMean) / leftTwoVeloSD))) + (.25 * (1+((leftTwoHorz[i] - leftTwoHorzMean) / leftTwoHorzSD))) + (.25 * (1+(-(leftTwoIVB[i] - leftTwoIVBMean) / leftTwoIVBSD)))
+  }
+  return(stuffVect)
+}
+
+leftTwoStuff <- leftTwoStuffFunction(accLeftTwo)
+
+leftTwoStuff
+
+leftTwoIVB[3] - leftTwoIVBMean
+```
+
+
+
+# Create a Stuff+ Value
+
+```{r}
+stuffPlusVect <- vector()
+
+stuffPlusFunction <- function(x){
+  for(i in 1:length(x)){
+    stuffPlusVect[i] <- 100*(x[i])
+  }
+  return(stuffPlusVect)
+}
+
+rightFourStuffPlus <- stuffPlusFunction(rightFourSeamStuff)
+rightTwoStuffPlus <- stuffPlusFunction(rightTwoStuff)
+leftFourStuffPlus <- stuffPlusFunction(leftFourSeamStuff)
+leftTwoStuffPlus <- stuffPlusFunction(leftTwoStuff)
+
+```
+
+# Export Stuff+ Values
+
+```{r}
+#Right Handed Four Seam
+rightFourStuffPlusTable <- mapply(c, unique(accRightFour$Pitcher), rightFourTeam, rightFourLevel, rightFourCount, rightFourVelo, rightFourAdjustVelo, rightFourHorz, rightFourIVB, rightFourVeloPercentile, rightFourHorzPercentile, rightFourIVBPercentile, rightIVBBucketPercentile, rightFourStuffPlus, SIMPLIFY = FALSE)
+
+write.csv(rightFourStuffPlusTable, "2022 NCAA Right Handed Four Seam Stuff+.csv")
+
+#Right Handed Two Seam
+rightTwoStuffPlusTable <- mapply(c, unique(accRightTwo$Pitcher), rightTwoTeam, rightTwoLevel, rightTwoCount, rightTwoVelo, rightTwoAdjustVelo, rightTwoHorz, rightTwoIVB, rightTwoVeloPercentile, rightTwoHorzPercentile, rightTwoIVBPercentileYes,  rightTwoStuffPlus, SIMPLIFY = FALSE)
+
+write.csv(rightTwoStuffPlusTable, "2022 NCAA Right Handed Two Seam Stuff+.csv", row.names = FALSE)
+
+#Left Handed Four Seam
+leftFourStuffPlusTable <- mapply(c, unique(accLeftFour$Pitcher), leftFourTeam, leftFourLevel, leftFourCount, leftFourVelo, leftFourAdjustVelo, leftFourHorz, leftFourIVB, leftFourVeloPercentile, leftFourHorzPercentile, leftFourIVBPercentile, leftIVBBucketPercentile, leftFourStuffPlus, SIMPLIFY = FALSE)
+
+write.csv(leftFourStuffPlusTable, "2022 NCAA Left Handed Four Seam Stuff+.csv")
+
+#Left Handed Two Seam
+leftTwoStuffPlusTable <- mapply(c, unique(accLeftTwo$Pitcher), leftTwoTeam, leftTwoLevel, leftTwoCount, leftTwoVelo, leftTwoAdjustVelo, leftTwoHorz, leftTwoIVB, leftTwoVeloPercentile, leftTwoHorzPercentile, leftTwoIVBPercentileYes,  leftTwoStuffPlus, SIMPLIFY = FALSE)
+
+write.csv(leftTwoStuffPlusTable, "2022 NCAA Left Handed Two Seam Stuff+.csv", row.names = FALSE)
+
+beep(3)
+```
