@@ -1,0 +1,125 @@
+---
+title: "wOBA Calculator"
+author: "Alexander Harriman"
+date: "2022-08-25"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This file calculates college wOBA based on Trackman data. Equation last updated 2022
+
+# Load Data
+```{r, warning = FALSE}
+library(readxl)
+pitchers2022 <- read.csv("2022 NCAA Trackman with Command.csv")
+pitchers2022 <- pitchers2022[is.na(pitchers2022$Pitcher) == FALSE,]
+pitchers2022 <- pitchers2022[is.na(pitchers2022$TaggedPitchType) == FALSE,]
+pitchers2022 <- pitchers2022[is.na(pitchers2022$PlayResult) == FALSE,]
+pitchers2022 <- pitchers2022[is.na(pitchers2022$PitchCall) == FALSE,]
+pitchers2022 <- pitchers2022[is.na(pitchers2022$KorBB) == FALSE,]
+```
+
+# Find the teams for each pitcher
+```{r}
+team <- vector()
+teamFinder <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    base <- unique(x$Pitcher)[i]
+    pitcher <- x[x$Pitcher == base,]
+    team[i] <- unique(pitcher$PitcherTeam)[1]
+  }
+  return(team)
+}
+
+teams <- teamFinder(pitchers2022)
+```
+
+# Calculate Numerator
+
+The numerator of wOBA requires unintentional walks and all forms of hits. For each pitcher, the number of each is calculated. Then, each weight is assigned and summed up.
+
+```{r}
+numerator <- vector()
+sums <- 0
+wOBA <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    base <- unique(x$Pitcher)[i]
+    pitcher <- x[x$Pitcher == base,]
+    for(a in 1:dim(pitcher)[1]){
+      if(pitcher$PitchCall[a] == "HitByPitch"){
+        sums <- sums + .728
+      }
+      else if(pitcher$PlayResult[a] == "Single"){
+        sums <- sums + .883
+      }
+      else if(pitcher$PlayResult[a] == "Double"){
+        sums <- sums + 1.238
+      }
+      else if(pitcher$PlayResult[a] == "Triple"){
+        sums <- sums + 1.558
+      }
+      else if(pitcher$PlayResult[a] == "HomeRun"){
+        sums <- sums + 1.979
+      }
+      else if(pitcher$KorBB[a] == "Walk"){
+        sums <- sums + .699
+      }
+    }
+    numerator[i] <- sums
+    sums <- 0
+  }
+  return(numerator)
+}
+
+totalwOBA <- wOBA(pitchers2022)
+```
+
+# Calculate Denominator
+
+The denominator is the sum of at bats, walks, sacrifices, and hit by pitches.
+
+```{r}
+denominator <- vector()
+total <- 0
+
+denom <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    base <- unique(x$Pitcher)[i]
+    pitcher <- x[x$Pitcher == base,]
+    for(a in 1:dim(pitcher)[1]){
+      if(pitcher$PlayResult[a] != "Undefined" && pitcher$PlayResult[a] != "FieldersChoice" && pitcher$PlayResult[a] != "Error"){
+        total <- total + 1
+      }
+      else if(pitcher$KorBB[a] == "Strikeout" | pitcher$KorBB[a] == "Walk"){
+        total <- total + 1
+      }
+      else if(pitcher$PitchCall[a] == "HitByPitch"){
+        total <- total + 1
+      }
+    }
+    denominator[i] <- total
+    total <- 0
+  }
+  return(denominator)
+}
+
+denominator <- denom(pitchers2022)
+```
+
+# Calculate wOBA
+
+```{r}
+finalwOBA <- totalwOBA / denominator
+
+finalwOBA
+```
+
+# Export Results
+
+```{r}
+results <- mapply(c, unique(pitchers2022$Pitcher), teams, denominator, finalwOBA)
+write.csv(results, "2022 NCAA Pitcher wOBA.csv")
+```
