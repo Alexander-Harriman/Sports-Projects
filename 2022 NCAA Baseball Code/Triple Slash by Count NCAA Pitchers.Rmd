@@ -1,0 +1,336 @@
+---
+title: "First Strike Triple Slash ACC Pitchers"
+author: "Alexander Harriman"
+date: "2022-09-06"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This file calculates the triple slash (BA, OBP, SLG) for the first pitch strikes thrown by pitchers. Since the reduced data does not include count information, the large reduced data must be imported.
+
+# Load Data
+```{r, warning = FALSE}
+pitchers2022 <- read.csv("Large Trackman with Command.csv")
+pitchers2022 <- pitchers2022[pitchers2022$Level == "D1",]
+```
+
+# Remove NA Values
+```{r}
+pitchers2022 <- pitchers2022[is.na(pitchers2022$Pitcher) == FALSE,]
+pitchers2022 <- pitchers2022[is.na(pitchers2022$Balls) == FALSE,]
+pitchers2022 <- pitchers2022[is.na(pitchers2022$Strikes) == FALSE,]
+pitchers2022 <- pitchers2022[is.na(pitchers2022$PlayResult) == FALSE,]
+pitchers2022 <- pitchers2022[is.na(pitchers2022$PitchCall) == FALSE,]
+pitchers2022 <- pitchers2022[is.na(pitchers2022$RelSpeed) == FALSE,]
+pitchers2022 <- pitchers2022[is.na(pitchers2022$PlateLocHeight) == FALSE,]
+pitchers2022 <- pitchers2022[is.na(pitchers2022$PlateLocSide) == FALSE,]
+pitchers2022 <- pitchers2022[is.na(pitchers2022$TaggedHitType) == FALSE,]
+```
+
+# Separate into Pitches
+```{r}
+#Fastballs
+fastball2022 <- pitchers2022[pitchers2022$TaggedPitchType == "Fastball",]
+
+#Sliders
+slider2022 <- pitchers2022[pitchers2022$TaggedPitchType == "Slider",]
+
+#Changeup
+changeup2022 <- pitchers2022[pitchers2022$TaggedPitchType == "ChangeUp",]
+
+#Cutter
+cutter2022 <- pitchers2022[pitchers2022$TaggedPitchType == "Cutter",]
+
+#Curveball
+curveball2022 <- pitchers2022[pitchers2022$TaggedPitchType == "Curveball",]
+
+fastball2022 <- fastball2022[fastball2022$RelSpeed > 85.999,]
+```
+
+
+# Find First Pitches
+
+The count will be used to find the first pitches for each pitch type.
+
+```{r}
+firstFast <- fastball2022[fastball2022$Balls == 0 & fastball2022$Strikes == 0,]
+firstSlider <- slider2022[slider2022$Balls == 0 & slider2022$Strikes == 0,]
+firstChange <- changeup2022[changeup2022$Balls == 0 & changeup2022$Strikes == 0,]
+firstCut <- cutter2022[cutter2022$Balls == 0 & cutter2022$Strikes == 0,]
+firstCurve <- curveball2022[curveball2022$Balls == 0 & curveball2022$Strikes == 0,]
+```
+
+# Find First Contact Pitcher Lists
+
+We have to find the list of pitchers with balls in play to properly match the metrics to the correct pitchers. While this code will be repeated during the three functions that calculate the triple slash, the list of pitchers is needed at the end to fully combine the table with the non-hit metrics.
+
+```{r}
+pitchers <- vector()
+
+pitcherList <- function(x){
+  firstContact <- x[x$PitchCall == "InPlay" | x$PitchCall == "HitByPitch",]
+  sacFlies <- firstContact[firstContact$PlayResult == "Sacrifice" & firstContact$TaggedHitType == "FlyBall",]
+  sacLines <- firstContact[firstContact$PlayResult == "Sacrifice" & firstContact$TaggedHitType == "LineDrive",]
+  hitPot <- firstContact[firstContact$PlayResult != "Sacrifice",]
+  firstContact <- rbind(sacFlies, sacLines, hitPot)
+  pitcherList <- unique(firstContact$Pitcher)
+}
+
+fastPitcher <- pitcherList(firstFast)
+```
+
+
+# Find BA for First-Pitch Strikes
+
+Now that we have all of the first-pitch strikes, we will calculate all of the hits on those pitches to determine batting average.
+
+```{r}
+hitCount <- 0
+baVect <- vector()
+
+#Add Strikeouts from KorBB for all two strike counts to firstContact
+
+batAvg <- function(x){
+  firstContact <- x[x$PitchCall == "InPlay",]# | x$KorBB == "Strikeout",]
+  firstContact <- firstContact[firstContact$PlayResult != "Sacrifice",]
+  for(a in 1:length(fastPitcher)){
+    base <- fastPitcher[a]
+    pitcher <- firstContact[firstContact$Pitcher == base,]
+    if(dim(pitcher)[1] == 0){
+      baVect[a] <- NA
+      next
+    }
+    for(i in 1:dim(pitcher)[1]){
+      if(pitcher$PlayResult[i] == "Single"){
+        hitCount <- hitCount + 1
+      }
+      else if(pitcher$PlayResult[i] == "Double"){
+        hitCount <- hitCount + 1
+      }
+      else if(pitcher$PlayResult[i] == "Triple"){
+        hitCount <- hitCount + 1
+      }
+      else if(pitcher$PlayResult[i] == "HomeRun"){
+        hitCount <- hitCount + 1
+      }
+    }
+    baVect[a] <- hitCount / (dim(pitcher)[1])
+    hitCount <- 0
+  }
+  return(baVect)
+}
+
+fastBA <- batAvg(firstFast)
+slideBA <- batAvg(firstSlider)
+changeBA <- batAvg(firstChange)
+cutBA <- batAvg(firstCut)
+curBA <- batAvg(firstCurve)
+```
+
+# Find OBP for First-Pitch Strikes
+
+Next up is OBP.
+
+```{r}
+onBaseCount <- 0
+OBPVect <- vector()
+
+#Don't forget to include walks for three ball counts and strikeouts for two strike counts within the firstContact code
+
+batOBP <- function(x){
+  firstContact <- x[x$PitchCall == "InPlay" | x$PitchCall == "HitByPitch",]# | x$KorBB == "Strikeout" | x$KorBB == "Walk",]
+  sacFlies <- firstContact[firstContact$PlayResult == "Sacrifice" & firstContact$TaggedHitType == "FlyBall",]
+  sacLines <- firstContact[firstContact$PlayResult == "Sacrifice" & firstContact$TaggedHitType == "LineDrive",]
+  hitPot <- firstContact[firstContact$PlayResult != "Sacrifice",]
+  firstContact <- rbind(sacFlies, sacLines, hitPot)
+  for(a in 1:length(fastPitcher)){
+    base <- fastPitcher[a]
+    pitcher <- firstContact[firstContact$Pitcher == base,]
+    if(dim(pitcher)[1] == 0){
+      OBPVect[a] <- NA
+      next
+    }
+    for(i in 1:dim(pitcher)[1]){
+      if(pitcher$PlayResult[i] == "Single"){
+        onBaseCount <- onBaseCount + 1
+      }
+      else if(pitcher$PlayResult[i] == "Double"){
+        onBaseCount <- onBaseCount + 1
+      }
+      else if(pitcher$PlayResult[i] == "Triple"){
+        onBaseCount <- onBaseCount + 1
+      }
+      else if(pitcher$PlayResult[i] == "HomeRun"){
+        onBaseCount <- onBaseCount + 1
+      }
+      else if(pitcher$PitchCall[i] == "HitByPitch"){
+        onBaseCount <- onBaseCount + 1
+      }
+      else if(pitcher$KorBB[i] == "Walk"){
+        onBaseCount <- onBaseCount + 1
+      }
+    }
+    OBPVect[a] <- onBaseCount / dim(pitcher)[1]
+    onBaseCount <- 0
+  }
+  return(OBPVect)
+}
+
+fastOBP <- batOBP(firstFast)
+slideOBP <- batOBP(firstSlider)
+changeOBP <- batOBP(firstChange)
+cutOBP <- batOBP(firstCut)
+curOBP <- batOBP(firstCurve)
+```
+
+# Find SLG for First-Pitch Strikes
+
+Next up is SLG. The setup for at-bats is similar to that of BA.
+
+```{r}
+baseCount <- 0
+slugVect <- 0
+
+#Add Strikeouts from KorBB for all two strike counts
+
+batSLG <- function(x){
+  firstContact <- x[x$PitchCall == "InPlay",]# | x$KorBB == "Strikeout",]
+  firstContact <- firstContact[firstContact$PlayResult != "Sacrifice",]
+  for(a in 1:length(fastPitcher)){
+    base <- fastPitcher[a]
+    pitcher <- firstContact[firstContact$Pitcher == base,]
+    if(dim(pitcher)[1] == 0){
+      slugVect[a] <- NA
+      next
+    }
+    for(i in 1:dim(pitcher)[1]){
+      if(pitcher$PlayResult[i] == "Single"){
+        baseCount <- baseCount + 1
+      }
+      else if(pitcher$PlayResult[i] == "Double"){
+        baseCount <- baseCount + 2
+      }
+      else if(pitcher$PlayResult[i] == "Triple"){
+        baseCount <- baseCount + 3
+      }
+      else if(pitcher$PlayResult[i] == "HomeRun"){
+        baseCount <- baseCount + 4
+      }
+    }
+    slugVect[a] <- baseCount / (dim(pitcher)[1])
+    baseCount <- 0
+  }
+  return(slugVect)
+}
+
+fastSlug <- batSLG(firstFast)
+slideSlug <- batSLG(firstSlider)
+changeSlug <- batSLG(firstChange)
+cutSlug <- batSLG(firstCut)
+curSlug <- batSLG(firstCurve)
+```
+
+
+# Export Table
+
+```{r}
+tripleSlash <- qpcR:::cbind.na(fastPitcher,fastBA,fastOBP,fastSlug,slideBA,slideOBP,slideSlug,changeBA,changeOBP,changeSlug,cutBA,cutOBP,cutSlug,curBA,curOBP,curSlug)
+```
+
+```{r}
+write.csv(tripleSlash, "NCAA Pitcher 2-1 Triple Slash.csv", row.names = FALSE)
+```
+
+
+# Combine Results Table with Triple Slash Table
+
+We can combine all of the tables together using a similar format to the results table.
+
+## Load Files
+
+```{r}
+triples <- read.csv("NCAA Pitcher 2-1 Triple Slash.csv")
+
+results <- read.csv("NCAA Individual 2-1 Results Metrics.csv")
+```
+
+## Change First Column Name
+```{r}
+colnames(triples)[1] <- "Pitcher"
+colnames(results)[1] <- "Pitcher"
+```
+
+
+## Merge Files
+```{r}
+library(tidyverse)
+masterTable <- list(triples, results)
+finalTable <- masterTable %>% reduce(full_join, by = "Pitcher")
+```
+
+## Export Final Table
+```{r}
+write.csv(finalTable, "First Pitch Metrics and Triple Slash by Pitcher 4.csv", row.names = FALSE)
+```
+
+# Data Manipulation
+
+We need to merge the table into usable data for the Tableau dashboard.
+```{r}
+fullTable <- read.csv("First Pitch Metrics and Triple Slash by Pitcher 4.csv")
+fullTable
+```
+
+# Create Correct Columns
+```{r}
+cleanTable <- data.frame(Pitcher = rep(fullTable$Pitcher,5), Team = rep(fullTable$fastTeam,5), Balls = rep(2, (5*length(fullTable$Pitcher))), Strikes = rep(1, (5*length(fullTable$Pitcher))), Pitch = c(rep("Fastball",length(fullTable$Pitcher)), rep("Slider",length(fullTable$Pitcher)), rep("Changeup",length(fullTable$Pitcher)),rep("Cutter",length(fullTable$Pitcher)),rep("Curveball",length(fullTable$Pitcher))), BA = c(fullTable[,"fastBA"],fullTable[,"slideBA"],fullTable[,"changeBA"],fullTable[,"cutBA"],fullTable[,"curBA"]), OBP = c(fullTable[,"fastOBP"],fullTable[,"slideOBP"],fullTable[,"changeOBP"],fullTable[,"cutOBP"],fullTable[,"curOBP"]), SLG = c(fullTable[,"fastSlug"],fullTable[,"slideSlug"],fullTable[,"changeSlug"],fullTable[,"cutSlug"],fullTable[,"curSlug"]), Count = c(fullTable[,"fastCount"],fullTable[,"sliderCount"],fullTable[,"changeCount"],fullTable[,"cutCount"],fullTable[,"curveCount"]), Whiff = c(fullTable[,"fastWhiff"],fullTable[,"slideWhiff"],fullTable[,"changeWhiff"],fullTable[,"cutWhiff"],fullTable[,"curWhiff"]), Strike = c(fullTable[,"fastStrike"],fullTable[,"slideStrike"],fullTable[,"changeStrike"],fullTable[,"cutStrike"],fullTable[,"curStrike"]), Ball = c(fullTable[,"ballFast"],fullTable[,"ballSlide"],fullTable[,"ballChange"],fullTable[,"ballCut"],fullTable[,"ballCur"]), InPlay = c(fullTable[,"fastPlay"],fullTable[,"slidePlay"],fullTable[,"changePlay"],fullTable[,"cutPlay"],fullTable[,"curPlay"]), Out = c(fullTable[,"fastOut"],fullTable[,"slideOut"],fullTable[,"changeOut"],fullTable[,"cutOut"],fullTable[,"curOut"]), Foul = c(fullTable[,"fastFoul"],fullTable[,"slideFoul"],fullTable[,"changeFoul"],fullTable[,"cutFoul"],fullTable[,"curFoul"]), HBP = c(fullTable[,"fastPlunk"],fullTable[,"slidePlunk"],fullTable[,"changePlunk"],fullTable[,"cutPlunk"],fullTable[,"curPlunk"]))
+```
+
+```{r}
+write.csv(cleanTable, "Individual Metrics by Count 2022 4.csv", row.names = FALSE)
+```
+
+
+# Combine all Count Tables
+
+```{r}
+zeroZero <- read.csv("Individual Metrics by Count 2022.csv")
+oneZero <- read.csv("Individual Metrics by Count 2022 2.csv")
+twoZero <- read.csv("Individual Metrics by Count 2022 3.csv")
+twoOne <- read.csv("Individual Metrics by Count 2022 4.csv")
+oneOne <- read.csv("Individual Metrics by Count 2022 5.csv")
+zeroOne <- read.csv("Individual Metrics by Count 2022 6.csv")
+threeOne <- read.csv("Individual Metrics by Count 2022 7.csv")
+threeZero <- read.csv("Individual Metrics by Count 2022 8.csv")
+threeTwo <- read.csv("Individual Metrics by Count 2022 9.csv")
+twoTwo <- read.csv("Individual Metrics by Count 2022 10.csv")
+oneTwo <- read.csv("Individual Metrics by Count 2022 11.csv")
+zeroTwo <- read.csv("Individual Metrics by Count 2022 12.csv")
+
+allCount <- rbind(zeroZero, oneZero, twoZero, twoOne, oneOne, zeroOne, threeOne, threeZero, threeTwo, twoTwo, oneTwo, zeroTwo)
+
+allCount
+
+write.csv(allCount, "ACC-SEC Pitcher Metrics by Count 2022.csv", row.names = FALSE)
+```
+
+# Remove all NA Rows
+
+If any NA rows appear in the data (possibly due to low pitch opportunities for a single pitcher in rarer counts), they will need to be removed before entering Tableau.
+
+```{r}
+allData <- read.csv("ACC-SEC Pitcher Metrics by Count 2022.csv")
+
+unique(allData$Team)
+
+#Null removal
+correctData <- allData[allData$Team != "",]
+correctData <- allData[is.na(allData$Pitcher) == FALSE,]
+
+write.csv(correctData, "ACC-SEC Pitcher Metrics by Count 2022.csv", row.names = FALSE)
+
+```
+
