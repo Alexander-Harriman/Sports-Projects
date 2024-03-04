@@ -1,0 +1,567 @@
+---
+title: "Edge% and Heart% Calculator"
+author: "Alexander Harriman"
+date: '2022-07-18'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This code takes a Trackman file with the Ball/Edge/Heart column defined and calculates the Edge% and Heart% for every pitcher within the file.
+
+Those columns are exported into their own csv file at the end.
+
+# Load Data
+```{r}
+pitchers2022 <- read.csv("2022 NCAA Trackman with Command.csv")
+
+pitchers2022 <- pitchers2022[is.na(pitchers2022$ZoneType) == FALSE,]
+pitchers2022 <- pitchers2022[is.na(pitchers2022$Pitcher) == FALSE,]
+```
+
+# Filter Data for Pitch Requirements
+
+## Fastball Filtering
+
+```{r}
+# Filter by Fastball
+
+ncaa2022 <- pitchers2022[pitchers2022$TaggedPitchType == "Fastball" | pitchers2022$TaggedPitchType == "Sinker",]
+
+# Filter by Minimum Speed
+ncaa2022 <- ncaa2022[ncaa2022$RelSpeed > 85.999,]
+
+# Separating lefties and righties
+
+ncaaRight <- ncaa2022[ncaa2022$PitcherThrows == "Right",]
+ncaaLeft <- ncaa2022[ncaa2022$PitcherThrows == "Left",]
+
+ncaaRight$Tilt.Coordinate
+# Using tilt to separate four-seamers and two-seamers
+
+rightTilt <- function(){
+  for(i in 1:dim(ncaaRight)[1]){
+    if(is.na(ncaaRight$Tilt.Coordinate[i]) == TRUE){
+      ncaaRight$`Pitch Assignment`[i] <<- "None"
+    }
+    else if(ncaaRight$Tilt.Coordinate[i] > 0.07 && ncaaRight$Tilt.Coordinate[i] < .135){
+      ncaaRight$`Pitch Assignment`[i] <<- "Right Two-Seam"
+    }
+    else if(ncaaRight$Tilt.Coordinate[i] > 0.04  && ncaaRight$Tilt.Coordinate[i] < .065){
+      ncaaRight$`Pitch Assignment`[i] <<- "Right Four-Seam"
+    }
+    else if(ncaaRight$Tilt.Coordinate[i] > 0.499 && ncaaRight$Tilt.Coordinate[i] < .532){
+      ncaaRight$`Pitch Assignment`[i] <<- "Right Four-Seam"
+    }
+  }
+  return(ncaaRight$`Pitch Assignment`)
+}
+
+rightTilt()
+
+ncaaRightFour <- ncaaRight[ncaaRight$`Pitch Assignment` == "Right Four-Seam",]
+ncaaRightTwo <- ncaaRight[ncaaRight$`Pitch Assignment` == "Right Two-Seam",]
+
+
+#Filter Out Bad Pitchers
+ncaaRightTwo <- ncaaRightTwo[ncaaRightTwo$Pitcher != "Maxwell, Zachary",]
+
+ncaaRightTwo <- ncaaRightTwo[ncaaRightTwo$Pitcher != "Stohr, Ryan",]
+ncaaRightTwo <- ncaaRightTwo[is.na(ncaaRightTwo$Pitcher) == FALSE,]
+
+ncaaRightFour <- ncaaRightFour[is.na(ncaaRightFour$Pitcher) == FALSE,]
+
+#Zachary Maxwell's two-seamers break the code due to their unorthodox measurables. These are almost certainly incorrectly marked in Trackman.
+
+#Ryan Stohr's fastballs have missing values in them, particularly for IVB.
+
+#Both types of fastballs contain NA values, which break the code.
+
+dim(ncaaRightFour)
+dim(ncaaRightTwo)
+
+leftTilt <- function(){
+  for(i in 1:dim(ncaaLeft)[1]){
+    if(is.na(ncaaLeft$Tilt.Coordinate[i]) == TRUE){
+      ncaaLeft$`Pitch Assignment`[i] <<- "None"
+    }
+    else if(ncaaLeft$Tilt.Coordinate[i] > .3749 && ncaaLeft$Tilt.Coordinate[i] < .428){
+      ncaaLeft$`Pitch Assignment`[i] <<- "Left Two-Seam"
+    }
+    else if(ncaaLeft$Tilt.Coordinate[i] >  .437 && ncaaLeft$Tilt.Coordinate[i] < 0.501){
+      ncaaLeft$`Pitch Assignment`[i] <<- "Left Four-Seam"
+    }
+  }
+  return(ncaaRight$`Pitch Assignment`)
+}
+
+leftTilt()
+
+
+ncaaLeftFour <- ncaaLeft[ncaaLeft$`Pitch Assignment` == "Left Four-Seam",]
+ncaaLeftTwo <- ncaaLeft[ncaaLeft$`Pitch Assignment` == "Left Two-Seam",]
+dim(ncaaLeftFour)
+dim(ncaaLeftTwo)
+```
+
+```{r}
+# Set Pitch Minimum at 50 Pitches:
+
+##This code takes 6 runs
+###Make sure not to continue until the dimensions line up after running
+
+#### Then continue
+
+pitcherClearLF <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    x <- ncaaLeftFour
+    base <- unique(x$Pitcher)[i]
+    if(length(x[x$Pitcher == base,]$PitchNo) < 50){
+      ncaaLeftFour <<- subset(x, x$Pitcher != base)
+    }
+  }
+  return(ncaaLeftFour)
+}
+
+pitcherClearLT <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    x <- ncaaLeftTwo
+    base <- unique(x$Pitcher)[i]
+    if(length(x[x$Pitcher == base,]$PitchNo) < 50){
+      ncaaLeftTwo <<- subset(x, x$Pitcher != base)
+    }
+  }
+  return(ncaaLeftTwo)
+}
+
+pitcherClearRF <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    x <- ncaaRightFour
+    base <- unique(x$Pitcher)[i]
+    if(length(x[x$Pitcher == base,]$PitchNo) < 50){
+      ncaaRightFour <<- subset(x, x$Pitcher != base)
+    }
+  }
+  return(ncaaRightFour)
+}
+
+pitcherClearRT <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    x <- ncaaRightTwo
+    base <- unique(x$Pitcher)[i]
+    if(length(x[x$Pitcher == base,]$PitchNo) < 50){
+      ncaaRightTwo <<- subset(x, x$Pitcher != base)
+    }
+  }
+  return(ncaaRightTwo)
+}
+
+dim(ncaaLeftFour)
+pitcherClearLF(ncaaLeftFour)
+dim(ncaaLeftFour)
+
+dim(ncaaRightTwo)
+pitcherClearRT(ncaaRightTwo)
+dim(ncaaRightTwo)
+
+dim(ncaaRightFour)
+pitcherClearRF(ncaaRightFour)
+dim(ncaaRightFour)
+
+dim(ncaaLeftTwo)
+pitcherClearLT(ncaaLeftTwo)
+dim(ncaaLeftTwo)
+```
+## Slider Filtering
+
+```{r}
+# Separating lefties and righties
+
+ncaa2022 <- pitchers2022[pitchers2022$TaggedPitchType == "Slider",]
+
+ncaaRight <- ncaa2022[ncaa2022$PitcherThrows == "Right",]
+ncaaLeft <- ncaa2022[ncaa2022$PitcherThrows == "Left",]
+
+ncaaRightSlider = subset(ncaaRight, ncaaRight$Tilt.Coordinate >= .333 & 
+                        ncaaRight$Tilt.Coordinate <= .4271)
+ncaaLeftSlider = subset(ncaaLeft, ncaaLeft$Tilt.Coordinate >= .0729 &
+                       ncaaLeft$Tilt.Coordinate <= .1667)
+
+dim(ncaaRightSlider)
+```
+
+```{r}
+# Set Pitch Minimum at 20 Pitches:
+
+##This code takes 6 runs
+###Make sure not to continue until the dimensions line up after running
+
+#### Then continue
+
+pitcherClearLSlider <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    x <- ncaaLeftSlider
+    base <- unique(x$Pitcher)[i]
+    if(length(x[x$Pitcher == base,]$PitchNo) < 50){
+      ncaaLeftSlider <<- subset(x, x$Pitcher != base)
+    }
+  }
+  return(ncaaLeftSlider)
+}
+
+pitcherClearRSlider <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    x <- ncaaRightSlider
+    base <- unique(x$Pitcher)[i]
+    if(length(x[x$Pitcher == base,]$PitchNo) < 50){
+      ncaaRightSlider <<- subset(x, x$Pitcher != base)
+    }
+  }
+  return(ncaaRightSlider)
+}
+
+dim(ncaaLeftSlider)
+pitcherClearLSlider(ncaaLeftSlider)
+dim(ncaaLeftSlider)
+
+dim(ncaaRightSlider)
+pitcherClearRSlider(ncaaRightSlider)
+dim(ncaaRightSlider)
+```
+
+## Changeup Filtering
+```{r}
+ncaaChangeup2022 <- pitchers2022[pitchers2022$TaggedPitchType == "ChangeUp",]
+```
+
+```{r}
+# Separating lefties and righties
+
+ncaaRightChangeup <- ncaaChangeup2022[ncaaChangeup2022$PitcherThrows == "Right",]
+ncaaLeftChangeup <- ncaaChangeup2022[ncaaChangeup2022$PitcherThrows == "Left",]
+```
+
+```{r}
+# Set Pitch Minimum at 20 Pitches:
+
+##This code takes 6 runs
+###Make sure not to continue until the dimensions line up after running
+
+#### Then continue
+
+pitcherClearLChangeup <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    x <- ncaaLeftChangeup
+    base <- unique(x$Pitcher)[i]
+    if(length(x[x$Pitcher == base,]$PitchNo) < 50){
+      ncaaLeftChangeup <<- subset(x, x$Pitcher != base)
+    }
+  }
+  return(ncaaLeftChangeup)
+}
+
+pitcherClearRChangeup <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    x <- ncaaRightChangeup
+    base <- unique(x$Pitcher)[i]
+    if(length(x[x$Pitcher == base,]$PitchNo) < 50){
+      ncaaRightChangeup <<- subset(x, x$Pitcher != base)
+    }
+  }
+  return(ncaaRightChangeup)
+}
+
+dim(ncaaLeftChangeup)
+pitcherClearLChangeup(ncaaLeftChangeup)
+dim(ncaaLeftChangeup)
+
+dim(ncaaRightChangeup)
+pitcherClearRChangeup(ncaaRightChangeup)
+dim(ncaaRightChangeup)
+```
+
+# Curveball Filtering
+
+```{r}
+# Separating lefties and righties
+
+ncaaRight <- pitchers2022[pitchers2022$PitcherThrows == "Right",]
+ncaaLeft <- pitchers2022[pitchers2022$PitcherThrows == "Left",]
+
+ncaaRightCurve = subset(ncaaRight, ncaaRight$TaggedPitchType == "Curveball")
+ncaaLeftCurve = subset(ncaaLeft, ncaaLeft$TaggedPitchType == "Curveball")
+```
+
+```{r}
+# Set Pitch Minimum at 20 Pitches by filtering out the rest:
+
+##This code takes 6 runs
+###Make sure not to continue until the dimensions line up after running
+
+#### Then continue
+
+pitcherClearLCurve <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    x <- ncaaLeftCurve
+    base <- unique(x$Pitcher)[i]
+    if(length(x[x$Pitcher == base,]$PitchNo) < 50){
+      ncaaLeftCurve <<- subset(x, x$Pitcher != base)
+    }
+  }
+  return(ncaaLeftCurve)
+}
+
+pitcherClearRCurve <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    x <- ncaaRightCurve
+    base <- unique(x$Pitcher)[i]
+    if(length(x[x$Pitcher == base,]$PitchNo) < 50){
+      ncaaRightCurve <<- subset(x, x$Pitcher != base)
+    }
+  }
+  return(ncaaRightCurve)
+}
+
+dim(ncaaLeftCurve)
+pitcherClearLCurve(ncaaLeftCurve)
+dim(ncaaLeftCurve)
+
+dim(ncaaRightCurve)
+pitcherClearRCurve(ncaaRightCurve)
+dim(ncaaRightCurve)
+```
+
+
+# Find Edge, Heart, and Ball Counts
+```{r}
+edge <- vector()
+heart <- vector()
+ball <- vector()
+edges <- 0
+hearts <- 0
+balls <- 0
+
+
+heartCounter <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    base <- unique(x$Pitcher)[i]
+    pitcher <- x[x$Pitcher == base,]
+    for(a in 1:length(pitcher$PitchNo)){
+      if(pitcher$ZoneType[a] == "Heart"){
+        hearts <- hearts + 1
+      }
+    }
+    heart[i] <- hearts
+    hearts <- 0
+  }
+  return(heart)
+}
+
+edgeCounter <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    base <- unique(x$Pitcher)[i]
+    pitcher <- x[x$Pitcher == base,]
+    for(a in 1:length(pitcher$PitchNo)){
+      if(pitcher$ZoneType[a] == "Edge"){
+        edges <- edges + 1
+      }
+    }
+    edge[i] <- edges
+    edges <- 0
+  }
+  return(edge)
+}
+
+ballCounter <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    base <- unique(x$Pitcher)[i]
+    pitcher <- x[x$Pitcher == base,]
+    for(a in 1:length(pitcher$PitchNo)){
+      if(pitcher$ZoneType[a] == "Ball"){
+        balls <- balls + 1
+      }
+    }
+    ball[i] <- balls
+    balls <- 0
+  }
+  return(ball)
+}
+
+ELF <- edgeCounter(ncaaLeftFour)
+ELT <- edgeCounter(ncaaLeftTwo)
+ERF <- edgeCounter(ncaaRightFour)
+ERT <- edgeCounter(ncaaRightTwo)
+ELS <- edgeCounter(ncaaLeftSlider)
+ERS <- edgeCounter(ncaaRightSlider)
+ELU <- edgeCounter(ncaaLeftChangeup)
+ERU <- edgeCounter(ncaaRightChangeup)
+ELC <- edgeCounter(ncaaLeftCurve)
+ERC <- edgeCounter(ncaaRightCurve)
+
+HLF <- heartCounter(ncaaLeftFour)
+HLT <- heartCounter(ncaaLeftTwo)
+HRF <- heartCounter(ncaaRightFour)
+HRT <- heartCounter(ncaaRightTwo)
+HLS <- heartCounter(ncaaLeftSlider)
+HRS <- heartCounter(ncaaRightSlider)
+HLU <- heartCounter(ncaaLeftChangeup)
+HRU <- heartCounter(ncaaRightChangeup)
+HLC <- heartCounter(ncaaLeftCurve)
+HRC <- heartCounter(ncaaRightCurve)
+
+BLF <- ballCounter(ncaaLeftFour)
+BLT <- ballCounter(ncaaLeftTwo)
+BRF <- ballCounter(ncaaRightFour)
+BRT <- ballCounter(ncaaRightTwo)
+BLS <- ballCounter(ncaaLeftSlider)
+BRS <- ballCounter(ncaaRightSlider)
+BLU <- ballCounter(ncaaLeftChangeup)
+BRU <- ballCounter(ncaaRightChangeup)
+BLC <- ballCounter(ncaaLeftCurve)
+BRC <- ballCounter(ncaaRightCurve)
+```
+
+# Find Pitch Count
+```{r}
+pitch <- vector()
+pitchCounter <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    base <- unique(x$Pitcher)[i]
+    pitcher <- x[x$Pitcher == base,]
+    pitch[i] <- dim(pitcher)[1]
+  }
+  return(pitch)
+}
+
+PLF <- pitchCounter(ncaaLeftFour)
+PLT <- pitchCounter(ncaaLeftTwo)
+PRF <- pitchCounter(ncaaRightFour)
+PRT <- pitchCounter(ncaaRightTwo)
+PLS <- pitchCounter(ncaaLeftSlider)
+PRS <- pitchCounter(ncaaRightSlider)
+PLU <- pitchCounter(ncaaLeftChangeup)
+PRU <- pitchCounter(ncaaRightChangeup)
+PLC <- pitchCounter(ncaaLeftCurve)
+PRC <- pitchCounter(ncaaRightCurve)
+```
+
+# Find Edge% and Heart%
+
+```{r}
+percentage <- vector()
+
+percentCounter <- function(x,y){
+  for(i in 1:length(x)){
+    percentage[i] <- 100*x[i] / y[i]
+  }
+  return(percentage)
+}
+
+leftFourEdge <- percentCounter(ELF, PLF)
+leftTwoEdge <- percentCounter(ELT, PLT)
+rightFourEdge <- percentCounter(ERF, PRF)
+rightTwoEdge <- percentCounter(ERT, PRT)
+leftSliderEdge <- percentCounter(ELS, PLS)
+rightSliderEdge <- percentCounter(ERS, PRS)
+leftChangeupEdge <- percentCounter(ELU, PLU)
+rightChangeupEdge <- percentCounter(ERU, PRU)
+leftCurveEdge <- percentCounter(ELC, PLC)
+rightCurveEdge <- percentCounter(ERC, PRC)
+
+leftFourHeart <- percentCounter(HLF, PLF)
+leftTwoHeart <- percentCounter(HLT, PLT)
+rightFourHeart <- percentCounter(HRF, PRF)
+rightTwoHeart <- percentCounter(HRT, PRT)
+leftSliderHeart <- percentCounter(HLS, PLS)
+rightSliderHeart <- percentCounter(HRS, PRS)
+leftChangeupHeart <- percentCounter(HLU, PLU)
+rightChangeupHeart <- percentCounter(HRU, PRU)
+leftCurveHeart <- percentCounter(HLC, PLC)
+rightCurveHeart <- percentCounter(HRC, PRC)
+
+leftFourBall <- percentCounter(BLF, PLF)
+leftTwoBall <- percentCounter(BLT, PLT)
+rightFourBall <- percentCounter(BRF, PRF)
+rightTwoBall <- percentCounter(BRT, PRT)
+leftSliderBall <- percentCounter(BLS, PLS)
+rightSliderBall <- percentCounter(BRS, PRS)
+leftChangeupBall <- percentCounter(BLU, PLU)
+rightChangeupBall <- percentCounter(BRU, PRU)
+leftCurveBall <- percentCounter(BLC, PLC)
+rightCurveBall <- percentCounter(BRC, PRC)
+```
+
+# Find Pitcher Team
+```{r}
+# Find the teams for each pitcher
+team <- vector()
+teamFinder <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    base <- unique(x$Pitcher)[i]
+    pitcher <- x[x$Pitcher == base,]
+    team[i] <- unique(pitcher$PitcherTeam)[1]
+  }
+  return(team)
+}
+
+leftFourTeam <- teamFinder(ncaaLeftFour)
+rightFourTeam <- teamFinder(ncaaRightFour)
+leftTwoTeam <- teamFinder(ncaaLeftTwo)
+rightTwoTeam <- teamFinder(ncaaRightTwo)
+leftSliderTeam <- teamFinder(ncaaLeftSlider)
+rightSliderTeam <- teamFinder(ncaaRightSlider)
+leftChangeupTeam <- teamFinder(ncaaLeftChangeup)
+rightChangeupTeam <- teamFinder(ncaaRightChangeup)
+leftCurveTeam <- teamFinder(ncaaLeftCurve)
+rightCurveTeam <- teamFinder(ncaaRightCurve)
+```
+
+# Export Files
+
+```{r}
+library(dplyr)
+leftFourTable <- mapply(c, unique(ncaaLeftFour$Pitcher), leftFourTeam, ELF, HLF, BLF, PLF, leftFourEdge, leftFourHeart, leftFourBall)
+
+leftTwoTable <- mapply(c, unique(ncaaLeftTwo$Pitcher), leftTwoTeam, ELT, HLT, BLT, PLT, leftTwoEdge, leftTwoHeart, leftTwoBall)
+
+rightFourTable <- mapply(c, unique(ncaaRightFour$Pitcher), rightFourTeam, ERF, HRF, BRF, PRF, rightFourEdge, rightFourHeart, rightFourBall)
+
+rightTwoTable <- mapply(c, unique(ncaaRightTwo$Pitcher), rightTwoTeam, ERT, HRT, BRT, PRT, rightTwoEdge, rightTwoHeart, rightTwoBall)
+
+leftSliderTable <- mapply(c, unique(ncaaLeftSlider$Pitcher), leftSliderTeam, ELS, HLS, BLS, PLS, leftSliderEdge, leftSliderHeart, leftSliderBall)
+
+rightSliderTable <- mapply(c, unique(ncaaRightSlider$Pitcher), rightSliderTeam, ERS, HRS, BRS, PRS, rightSliderEdge, rightSliderHeart, rightSliderBall)
+
+leftChangeupTable <- mapply(c, unique(ncaaLeftChangeup$Pitcher), leftChangeupTeam, ELU, HLU, BLU, PLU, leftChangeupEdge, leftChangeupHeart, leftChangeupBall)
+
+rightChangeupTable <- mapply(c, unique(ncaaRightChangeup$Pitcher), rightChangeupTeam, ERU, HRU, BRU, PRU, rightChangeupEdge, rightChangeupHeart, rightChangeupBall)
+
+leftCurveTable <- mapply(c, unique(ncaaLeftCurve$Pitcher), leftCurveTeam, ELC, HLC, BLC, PLC, leftCurveEdge, leftCurveHeart, leftCurveBall)
+
+rightCurveTable <- mapply(c, unique(ncaaRightCurve$Pitcher), rightCurveTeam, ERC, HRC, BRC, PRC, rightCurveEdge, rightCurveHeart, rightCurveBall)
+```
+
+# Export Files
+```{r}
+write.csv(leftFourTable, "2022 NCAA Left Four Edge Heart Ball%.csv", row.names = FALSE)
+
+write.csv(leftTwoTable, "2022 NCAA Left Two Edge Heart Ball%.csv", row.names = FALSE)
+
+write.csv(rightFourTable, "2022 NCAA Right Four Edge Heart Ball%.csv", row.names = FALSE)
+
+write.csv(rightTwoTable, "2022 NCAA Right Two Edge Heart Ball%.csv", row.names = FALSE)
+
+write.csv(leftSliderTable, "2022 NCAA Left Slider Edge Heart Ball%.csv", row.names = FALSE)
+
+write.csv(rightSliderTable, "2022 NCAA Right Slider Edge Heart Ball%.csv", row.names = FALSE)
+
+write.csv(leftChangeupTable, "2022 NCAA Left Changeup Edge Heart Ball%.csv", row.names = FALSE)
+
+write.csv(rightChangeupTable, "2022 NCAA Right Changeup Edge Heart Ball%.csv", row.names = FALSE)
+
+write.csv(leftCurveTable, "2022 NCAA Left Curve Edge Heart Ball%.csv", row.names = FALSE)
+
+write.csv(rightCurveTable, "2022 NCAA Right Curve Edge Heart Ball%.csv", row.names = FALSE)
+```
