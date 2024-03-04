@@ -1,0 +1,221 @@
+---
+title: "Top 100 Batter wOBA"
+author: "Alexander Harriman"
+date: "2022-11-01"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This file finds the 100 batters with the highest wOBA and creates a subset of Trackman data that will be used to find metrics on them in a separate code file.
+
+# Load Data
+
+```{r}
+pitchers2022 <- read.csv("Full 2022 Trackman.csv")
+```
+
+# Filter Out NA Values
+
+```{r}
+pitchers2022 <- pitchers2022[is.na(pitchers2022$Batter) == FALSE,]
+pitchers2022 <- pitchers2022[is.na(pitchers2022$TaggedPitchType) == FALSE,]
+pitchers2022 <- pitchers2022[is.na(pitchers2022$PlayResult) == FALSE,]
+pitchers2022 <- pitchers2022[is.na(pitchers2022$PitchCall) == FALSE,]
+pitchers2022 <- pitchers2022[is.na(pitchers2022$KorBB) == FALSE,]
+pitchers2022 <- pitchers2022[pitchers2022$Level == "D1",]
+```
+
+# Filter Out Small AB Counts
+
+Batters will only be included if they have a minimum of 150 at-bats. 
+
+```{r}
+#Find Batter List
+batterAB <- 1
+
+filteredData <- data.frame()
+
+abCount <- function(){
+  for(i in 1:length(batterList)){
+    batter <- batterList[i]
+    base <- pitchers2022[pitchers2022$Batter == batter,]
+    if(length(base$PitchNo) < 2){
+      next
+    }
+    for(j in 2:length(base$PitchNo)){
+      if(base$PitchNo[j] - base$PitchNo[j-1] != 1){
+        batterAB <- batterAB + 1
+      }
+    }
+    if(batterAB >= 150){
+      filteredData <<- rbind(filteredData, base)
+    }
+    batterAB <- 1
+  }
+  return(filteredData)
+}
+
+filteredPitcher <- abCount()
+
+#The double arrow saves filteredData globally. It will be used in later code; if this is changed, then all instances of filteredData will need to be changed to filteredPitcher.
+```
+
+# Create New Batter List
+
+Now that the data has been filtered down, a new batter list will be created. The length should be higher than 100 batters; if not, a lower at-bat limit must be created.
+
+```{r}
+filteredBatter <- unique(filteredData$Batter)
+length(filteredBatter)
+```
+
+With 345 batters in the filtered data, we are ready to find wOBA.
+
+# Calculate Batter wOBA
+
+This is the same code for pitcher wOBA, but adjusted to each batter instead.
+
+## Calculate Numerator
+
+The numerator of wOBA requires unintentional walks and all forms of hits. For each batter, the number of each is calculated. Then, each weight is assigned and summed up.
+
+```{r}
+numerator <- vector()
+sums <- 0
+wOBA <- function(x){
+  for(i in 1:length(filteredBatter)){
+    base <- filteredBatter[i]
+    batter <- x[x$Batter == base,]
+    for(a in 1:dim(batter)[1]){
+      if(batter$PitchCall[a] == "HitByPitch"){
+        sums <- sums + .728
+      }
+      else if(batter$PlayResult[a] == "Single"){
+        sums <- sums + .883
+      }
+      else if(batter$PlayResult[a] == "Double"){
+        sums <- sums + 1.238
+      }
+      else if(batter$PlayResult[a] == "Triple"){
+        sums <- sums + 1.558
+      }
+      else if(batter$PlayResult[a] == "HomeRun"){
+        sums <- sums + 1.979
+      }
+      else if(batter$KorBB[a] == "Walk"){
+        sums <- sums + .699
+      }
+    }
+    numerator[i] <- sums
+    sums <- 0
+  }
+  return(numerator)
+}
+
+totalwOBA <- wOBA(filteredData)
+```
+
+## Calculate Denominator
+
+The denominator is the sum of at bats, walks, sacrifices, and hit by pitches.
+
+```{r}
+denominator <- vector()
+total <- 0
+
+denom <- function(x){
+  for(i in 1:length(filteredBatter)){
+    base <- filteredBatter[i]
+    batter <- x[x$Batter == base,]
+    for(a in 1:dim(batter)[1]){
+      if(batter$PlayResult[a] != "Undefined" && batter$PlayResult[a] != "FieldersChoice" && batter$PlayResult[a] != "Error"){
+        total <- total + 1
+      }
+      else if(batter$KorBB[a] == "Strikeout" | batter$KorBB[a] == "Walk"){
+        total <- total + 1
+      }
+      else if(batter$PitchCall[a] == "HitByPitch"){
+        total <- total + 1
+      }
+    }
+    denominator[i] <- total
+    total <- 0
+  }
+  return(denominator)
+}
+
+denominator <- denom(filteredData)
+```
+
+## Calculate wOBA
+
+```{r}
+finalwOBA <- totalwOBA / denominator
+
+finalwOBA
+```
+
+# Find Top 100 wOBA
+
+Now that all of our qualified batters have a wOBA value, only the top 100 are needed for analysis.
+
+```{r}
+#Creating a data.frame with batter name and wOBA
+library(qpcR)
+
+#Create a long list
+wOBATable <- qpcR:::cbind.na(filteredBatter, finalwOBA)
+
+#Convert to table
+wOBATable <- as.data.frame(wOBATable)
+
+#Ensuring that wOBA is a number, not a character variable
+wOBATable$finalwOBA <- as.numeric(wOBATable$finalwOBA)
+
+wOBATable
+```
+
+```{r}
+#Ordering by top 100 wOBA
+topDownwOBA <- wOBATable[order(-wOBATable$finalwOBA),]
+
+topDownwOBA
+
+#Now only taking the top 100 rows
+top100wOBA <- topDownwOBA[1:100,]
+top100wOBA
+```
+
+# Filter Data Down to Top 100
+
+Now that we have identified the top 100 batters by wOBA, the final data filtering will begin.
+
+```{r}
+topData <- data.frame()
+
+bestwOBA <- function(x){
+  for(i in 1:length(filteredBatter)){
+    batter <- filteredBatter[i]
+    base <- x[x$Batter == batter,]
+    if(batter %in% top100wOBA$filteredBatter){
+      topData <<- rbind(topData, base)
+    }
+  }
+  return(topData)
+}
+
+top100 <- bestwOBA(filteredData)
+```
+
+# Export Data
+
+```{r}
+write.csv(topData, "Top 100 Batters by wOBA.csv", row.names = FALSE)
+```
+
+
+
+
