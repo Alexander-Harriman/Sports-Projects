@@ -1,0 +1,115 @@
+---
+title: "Maximum Velocity Finder"
+author: "Alexander Harriman"
+date: '2022-07-14'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This file finds the Whiff% for all pitchers on a given team, based on a given pitch.
+
+```{r, warning = FALSE}
+library(readxl)
+pitchers2022o <- read_excel("Reduced 2022 Trackman (5-4).xlsx")
+pitchers2022n <- read_excel("Reduced 2022 Trackman (5-5 to 5-21).xlsx")
+
+pitchers2022 <- rbind(pitchers2022n, pitchers2022o)
+
+beep(3)
+```
+
+
+# Filter down to team(s) studied
+
+If looking at a single conference instead, the code can be adjusted to $League == "Conference".
+```{r}
+#Clemson
+clemson <- pitchers2022[pitchers2022$PitcherTeam == "CLE_TIG",]
+clemson <- clemson[is.na(clemson$RelSpeed) == FALSE,]
+names <- unique(clemson$Pitcher)
+```
+
+# Filter down to pitcher(s) studied
+
+Only use if looking at specific pitchers on the team(s).
+```{r}
+ammons <- clemson[clemson$Pitcher == "Ammons, Ryan",]
+```
+
+# Filter down to pitch(es) studies
+
+Only used if looking at a specific pitch type(s) and not all pitches.
+
+```{r}
+#Ammons is a lefty, change based on handedness and pitch type
+ammonsSlider <- ammons[ammons$`Tilt Coordinate` >= .0729 & ammons$`Tilt Coordinate` <= .1667,]
+```
+
+# Find Swinging Strikes
+
+```{r}
+swing <- vector()
+
+strike <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    base <- unique(x$Pitcher)[i]
+    pitcher <- x[x$Pitcher == base,]
+    swingStrike <- pitcher[pitcher$PitchCall == "StrikeSwinging",]
+    swing[i] <- dim(swingStrike)[1]
+  }
+  return(swing)
+}
+
+KAmmons <- strike(ammonsSlider)
+KAmmons
+```
+
+
+# Find Number of Pitches
+```{r}
+count <- vector()
+pitchCount <- function(x){
+  for(i in 1:length(unique(x$Pitcher))){
+    number <- 0
+    base <- unique(x$Pitcher)[i]
+    pitcher <- x[x$Pitcher == base,]
+    for(a in 1:length(pitcher$PitchNo)){
+      if(is.na(pitcher$PitchCall[a]) == TRUE){
+        number <- number
+      }
+      else if(pitcher$PitchCall[a] == "StrikeSwinging"){
+        number <- number + 1
+      }
+      else if(pitcher$PitchCall[a] == "FoulBall"){
+        number <- number + 1
+      }
+      else if(pitcher$PitchCall[a] == "InPlay"){
+        number <- number + 1
+      }
+      else{
+        number <- number
+      }
+    }
+    count[i] <- number
+  }
+  return(count)
+}
+
+
+
+countAmmons <- pitchCount(ammonsSlider)
+```
+
+
+
+
+# Export Names and Values
+
+```{r}
+library(dplyr)
+maximum <- mapply(c, names, clemsonMax)
+write.csv(maximum, "Clemson Maximum Velocity by Pitcher 2022.csv")
+```
