@@ -1,0 +1,146 @@
+---
+title: "Individual Pitcher Arsenal Variation by Runner State and Outs"
+author: "Alexander Harriman"
+date: "2024-03-12"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    vertical_layout: fill
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+In this version of the code, the original data table will be transformed into a flexdashboard to account for the number of outs. Also, additional performance metrics will be factored into the process to determine why a pitcher may choose to adjust their arsenal usage.
+
+
+```{r, warning = FALSE}
+library(baseballr)
+library(tidyverse)
+library(gt)
+library(flexdashboard)
+```
+
+
+```{r}
+ids <- read.csv('MLBPlayerIDs.csv')
+
+ids
+```
+
+
+```{r}
+playerInput <- 'Blake Snell'
+
+playerID <- ids |>
+  filter(Name == playerInput) |>
+  select(MLBAMID)
+
+inputID <- playerID$MLBAMID[1]
+```
+
+
+
+```{r}
+# Get the PBP Data
+pitcherData <- statcast_search_pitchers(start_date = '2023-03-30', end_date = '2023-11-01', pitcherid = inputID)
+
+head(pitcherData)
+```
+
+# Separate Data by Runner State
+
+```{r}
+runnersData <- pitcherData |>
+  mutate(base_state = case_when(
+    is.na(on_3b) == TRUE & is.na(on_2b) == TRUE & is.na(on_1b) == TRUE ~ 'Bases Empty',
+    is.na(on_3b) == TRUE & is.na(on_2b) == TRUE & is.na(on_1b) == FALSE ~ 'Runner on 1st Only',
+    is.na(on_3b) == FALSE | is.na(on_2b) == FALSE ~ 'Runner(s) in Scoring Position'
+  ))
+```
+
+
+
+
+Full-Season Summary
+======================================
+
+Usage {data-height=500}
+-------------------------------------
+
+```{r}
+arsenal <- cleanData |>
+  group_by(base_state) |>
+  summarise(n = length(base_state),
+            FBs = round(100.0*sum(ifelse(pitch_name %in% c('Split-Finger', '4-Seam Fastball'), 1, 0)) / n, 1),
+            SIs = round(100.0*sum(ifelse(pitch_name == 'Sinker', 1, 0)) / n, 1),
+            CUs = round(100.0*sum(ifelse(pitch_name == 'Cutter', 1, 0)) / n, 1),
+            SLs = round(100.0*sum(ifelse(pitch_name == 'Slider', 1, 0)) / n, 1),
+            CBs = round(100.0*sum(ifelse(pitch_name == 'Curveball', 1, 0)) / n, 1),
+            CHs = round(100.0*sum(ifelse(pitch_name == 'Changeup', 1, 0)) / n, 1))
+
+
+finalTable <- arsenal |>
+  gt() |>
+  tab_header(title = md('**`r playerInput` Arsenal by Base State, 2023**')) |>
+  cols_align(align = 'center', columns = c('n', 'FBs', 'SIs', 'SLs', 'CUs', 'CBs', 'CHs')) |>
+  cols_label(base_state = 'Base State', 
+             n = '# Pitches', 
+             FBs = 'FB%', 
+             SIs = 'SI%', 
+             SLs = 'SL%',
+             CUs = 'CU%',
+             CBs = 'CB%',
+             CHs = 'CH%') |>
+  opt_stylize(style = 5, color = 'blue') |>
+  cols_width(base_state ~ px(250), n ~ px(75), everything() ~ px(60)) |>
+  tab_footnote('Includes Postseason')
+
+finalTable
+```
+
+
+
+Results {data-height=500}
+
+
+```{r}
+results <- cleanData |>
+  group_by(base_state) |>
+  summarise(n = length(base_state),
+            FBs = round(100.0*sum(ifelse(pitch_name %in% c('Split-Finger', '4-Seam Fastball'), 1, 0)) / n, 1),
+            SIs = round(100.0*sum(ifelse(pitch_name == 'Sinker', 1, 0)) / n, 1),
+            CUs = round(100.0*sum(ifelse(pitch_name == 'Cutter', 1, 0)) / n, 1),
+            SLs = round(100.0*sum(ifelse(pitch_name == 'Slider', 1, 0)) / n, 1),
+            CBs = round(100.0*sum(ifelse(pitch_name == 'Curveball', 1, 0)) / n, 1),
+            CHs = round(100.0*sum(ifelse(pitch_name == 'Changeup', 1, 0)) / n, 1))
+
+
+finalTable <- arsenal |>
+  gt() |>
+  tab_header(title = md('**`r playerInput` Arsenal by Base State, 2023**')) |>
+  cols_align(align = 'center', columns = c('n', 'FBs', 'SIs', 'SLs', 'CUs', 'CBs', 'CHs')) |>
+  cols_label(base_state = 'Base State', 
+             n = '# Pitches', 
+             FBs = 'FB%', 
+             SIs = 'SI%', 
+             SLs = 'SL%',
+             CUs = 'CU%',
+             CBs = 'CB%',
+             CHs = 'CH%') |>
+  opt_stylize(style = 5, color = 'blue') |>
+  cols_width(base_state ~ px(250), n ~ px(75), everything() ~ px(60)) |>
+  tab_footnote('Includes Postseason')
+
+finalTable
+```
+
+
+
+0-1 Outs
+=======================================
+
+
+
