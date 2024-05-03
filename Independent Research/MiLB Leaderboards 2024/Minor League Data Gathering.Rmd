@@ -1,0 +1,114 @@
+---
+title: "Minor League Data Gathering"
+author: "Alexander Harriman"
+date: "2024-05-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+This file should be used as the basis for any file that requires pitch-by-pitch data across the 2024 season. The code below will load all data into the R environment (or a CSV if necessary) for analysis in other files.
+
+# Finding Game PKs
+
+ID for each level:
+
+* MLB - 1
+* AAA - 11
+* AA - 12
+* A+ - 13
+* A - 14
+* Rookie Ball - 16
+
+```{r, warning=FALSE}
+library(baseballr)
+library(lubridate)
+library(dplyr)
+library(data.table)
+library(beepr)
+
+dateSequence <- seq(ymd('2024-04-05'), Sys.Date(), by = '1 day')
+
+# AA, High-A, and Low-A start on April 5
+## AAA start on March 29
+### MLB Korea Series start on March 20, rest of league on March 28
+#### Complex leagues start on May 4 and end July 25
+
+gamePKs <- c()
+
+dataAcquisition <- function(){
+  for(i in 1:length(dateSequence)){
+  allPK <- mlb_game_pks(date = dateSequence[i], level_ids = 12)$game_pk #Adjust level_id as needed, see above
+  gamePKs <- append(gamePKs, allPK)
+  }
+  return(gamePKs)
+}
+
+pkList <- dataAcquisition()
+```
+
+# Getting PBP Data from Game PKs
+
+
+```{r, warning = FALSE, error = TRUE}
+pitchData <- list()
+
+combiningData <- function(){
+  for(i in 1:length(pkList)){
+    skipFile <- FALSE
+    tryCatch(
+    {
+      gameData <- mlb_pbp(game_pk = pkList[i]) |>
+        filter(game_date != TRUE)
+      pitchData[[i]] <- gameData
+    },
+    error = function(e){
+      skipFile == TRUE
+      print(gameData$game_pk[1])
+    }
+    )
+  if(skipFile == TRUE){
+    next
+  }
+  }
+  return(pitchData)
+}
+
+dataList <- combiningData()
+
+allData <- rbindlist(dataList, fill = TRUE)
+
+dim(allData)[1]
+```
+
+
+# Data Save State
+
+```{r}
+write.csv(allData, '2024 AA May 3rd.csv')
+beep(3)
+```
+
+Saved Data List:
+
+2024 Low A: 2:38 PM May 3rd
+2024 High A: 3:03 PM May 3rd
+
+
+Approximate run time from start to save state: 20 mins.
+
+# Data Load State
+
+If a CSV needs to be loaded to save time. DO NOT INCLUDE IN CODE POSTED TO GITHUB
+
+```{r}
+lowAData <- read.csv('2024 Low A May 3rd.csv')
+```
+
+
+
+
