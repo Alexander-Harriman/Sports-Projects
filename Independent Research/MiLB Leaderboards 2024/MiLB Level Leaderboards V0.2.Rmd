@@ -1,0 +1,279 @@
+---
+title: "Minor League Data Gathering"
+author: "Alexander Harriman"
+date: "2024-05-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+This code creates leaderboards for a specific MiLB level and puts the information into a dashboard. 
+
+The leaderboards are as follows (up to V1.0):
+
+* Best pitchers by WHIP for a season, including IP, wOBA against, SO/BB/HR per 9
+* Best single outings by Tom Tango game score, including all parts of computation
+* Bet hitters by OPS+, including OBP, SLG, wOBA, and other metrics
+* Best single outings by wOBA, including other hitter metrics
+
+The goal is to show up-to-date best performances across the season and for individual games.
+
+
+Data is up-to-date for 2024 season. See code below (or Minor League Data Gathering.Rmd) for data gathering.
+
+
+# Finding Game PKs
+
+ID for each level:
+
+* MLB - 1
+* AAA - 11
+* AA - 12
+* A+ - 13
+* A - 14
+* Rookie Ball - 16
+
+```{r, warning=FALSE}
+library(baseballr)
+library(lubridate)
+library(dplyr)
+library(data.table)
+library(beepr)
+
+dateSequence <- seq(ymd('2024-04-05'), Sys.Date(), by = '1 day')
+
+# AA, High-A, and Low-A start on April 5
+## AAA start on March 29
+### MLB Korea Series start on March 20, rest of league on March 28
+#### Complex leagues start on May 4 and end July 25
+
+gamePKs <- c()
+
+dataAcquisition <- function(){
+  for(i in 1:length(dateSequence)){
+  allPK <- mlb_game_pks(date = dateSequence[i], level_ids = 13)$game_pk #Adjust level_id as needed, see above
+  gamePKs <- append(gamePKs, allPK)
+  }
+  return(gamePKs)
+}
+
+pkList <- dataAcquisition()
+```
+
+# Getting PBP Data from Game PKs
+
+
+```{r, warning = FALSE, error = TRUE}
+pitchData <- list()
+
+combiningData <- function(){
+  for(i in 1:length(pkList)){
+    skipFile <- FALSE
+    tryCatch(
+    {
+      gameData <- mlb_pbp(game_pk = pkList[i]) |>
+        filter(game_date != TRUE)
+      pitchData[[i]] <- gameData
+    },
+    error = function(e){
+      skipFile == TRUE
+      print(gameData$game_pk[1])
+    }
+    )
+  if(skipFile == TRUE){
+    next
+  }
+  }
+  return(pitchData)
+}
+
+dataList <- combiningData()
+
+allData <- rbindlist(dataList, fill = TRUE)
+
+dim(allData)[1]
+```
+
+
+# Data Save State
+
+```{r}
+write.csv(allData, '2024 High A May 7th.csv')
+beep(3)
+```
+
+Saved Data List:
+
+2024 Low A: 2:38 PM May 3rd
+2024 High A: 11:00 AM May 7th
+
+
+Approximate run time from start to save state: 20 mins.
+
+# Data Load State
+
+If a CSV needs to be loaded to save time. DO NOT INCLUDE IN CODE POSTED TO GITHUB
+
+```{r}
+lowAData <- read.csv('2024 High A May 6th.csv')
+```
+
+
+
+# Pitcher Results 
+
+This section will gather all of the pitcher information across the season.
+
+
+## Season Performance: Best Pitchers by WHIP
+
+
+```{r}
+library(dplyr)
+library(stringr)
+library(tidyr)
+library(weights)
+pitcherSeason <- allData |>
+  distinct(.keep_all = TRUE) |>
+  group_by(matchup.pitcher.fullName, fielding_team) |>
+  summarise(IP = sum(case_when(
+    details.isOut == TRUE & result.eventType %in% c('double_play', 'grounded_into_double_play', 
+                                                    'sac_fly_double_play', 'strikeout_double_play') ~ 2,
+    details.isOut == TRUE & !result.eventType %in% c('double_play', 'grounded_into_double_play', 
+                                                    'sac_fly_double_play', 'strikeout_double_play') ~ 1,
+    details.isOut == FALSE ~ 0
+  ), na.rm = TRUE) / 3,
+  SO = sum(ifelse(count.strikes.start == 3, 1, 0), na.rm = TRUE),
+  BB = sum(ifelse(count.balls.start == 4, 1, 0), na.rm = TRUE),
+  HR = sum(ifelse(result.eventType == 'home_run' & details.call.description == 'In play, run(s)', 1, 0),
+           na.rm = TRUE),
+  WHIPNum = sum(ifelse(result.eventType %in% c('walk', 'single', 'double', 'triple', 'home_run') &
+                         (count.balls.start == 4 | 
+                            details.call.description %in% c('In play, no out', 'In play, run(s)')), 1, 0), 
+                na.rm = TRUE),
+  wOBANum = sum(case_when(
+           result.eventType == 'walk' ~ 0.697,
+           result.eventType == 'hit_by_pitch' ~ 0.729,
+           result.eventType == 'single' ~ 0.896,
+           result.eventType == 'double' ~ 1.280,
+           result.eventType == 'triple' ~ 1.626,
+           result.eventType == 'home_run' ~ 2.103,
+           .default = 0
+         ), na.rm = TRUE),
+  wOBADenom = length(unique(paste(startTime,matchup.batter.fullName))) - 
+           sum(ifelse(result.eventType == 'intent_walk', 1, 0), na.rm = TRUE)) |>
+  mutate(WHIP = WHIPNum / IP,
+         wOBA = wOBANum / wOBADenom,
+         SO9 = (SO / IP) * 9,
+         BB9 = (BB / IP) * 9,
+         HR9 = (HR / IP) * 9,
+         IPDecimal = IP - floor(IP),
+         IPWhole = floor(IP)) 
+
+
+cleanSeason <- pitcherSeason |>
+  select(matchup.pitcher.fullName, fielding_team, IPWhole, IPDecimal, SO9, BB9, HR9, wOBA, WHIP) |>
+  mutate(IP = case_when(
+    round(IPDecimal, 1) == 0.3 ~ IPWhole + 0.1,
+    round(IPDecimal, 1) == 0.7 ~ IPWhole + 0.2,
+    .default = IPWhole
+  ),
+  SO9 = round(SO9, 2),
+  BB9 = round(BB9, 2),
+  HR9 = round(HR9, 2),
+  WHIP = round(WHIP, 2),
+  wOBA = rd(wOBA, digits = 3)) |>
+  select(matchup.pitcher.fullName, fielding_team, IP, SO9, BB9, HR9, wOBA, WHIP)
+
+cleanSeason
+```
+
+### Top 10 Pitchers by WHIP
+
+Pitchers must have thrown an above-average number of innings to qualify.
+
+
+```{r}
+averageIP <- mean(pitcherSeason$IP)
+
+qualifiedPitchers <- cleanSeason |>
+  filter(IP > floor(averageIP)) |>
+  ungroup() |>
+  mutate(WHIPRank = rank(WHIP, ties.method = 'min'))
+
+topPitchers <- qualifiedPitchers |>
+  filter(WHIPRank <= 10) |>
+  arrange(WHIP) |>
+  select(matchup.pitcher.fullName, fielding_team, IP, SO9, BB9, HR9, wOBA, WHIP)
+
+colnames(topPitchers) <- c('Name', 'Team', 'IP', 'K/9', 'BB/9', 'HR/9', 'wOBA', 'WHIP')
+
+topPitchers
+```
+
+
+
+```{r}
+library(gt)
+seasonBestPitchers <- topPitchers |>
+  gt() |>
+  tab_header(title = md('**Top High-A Pitchers by WHIP, 2024**')) |>
+  cols_align(align = 'center', columns = c('IP', 'K/9', 'BB/9', 'HR/9', 'wOBA', 'WHIP')) |>
+  opt_stylize(style = 5, color = 'red') |>
+  cols_width(Name ~ px(150), Team ~ px(225), everything() ~ px(75)) |>
+  tab_footnote(footnote = 'Last Updated May 7th')
+
+seasonBestPitchers
+```
+
+
+
+## Game Performance: Best Pitchers by Tom Tango Game Score
+
+Formula for the Tango Game Score:
+
+• Start with 40 points
+• Add 2 points for each out recorded (or 6 points per inning)
+• Add 1 additional point for every strikeout
+• Remove 2 points for each walk allowed
+• Remove 2 points for each hit allowed
+• Remove 3 points for each run allowed (earned or unearned)
+• Remove 6 additional points for each home run allowed
+
+
+```{r}
+
+```
+
+
+
+## Season Performance: Best Hitters by OPS+
+
+### Finding Season Averages
+
+
+```{r}
+
+```
+
+
+### Individual Calculations
+
+
+```{r}
+
+```
+
+
+
+## Game Performance: Best Hitters by Number of Bases
+
+
+```{r}
+
+```
+
