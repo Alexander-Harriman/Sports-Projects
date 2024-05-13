@@ -1,0 +1,264 @@
+---
+title: "Minor League Data Gathering"
+author: "Alexander Harriman"
+date: "2024-05-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+This code creates leaderboards for a specific MiLB level and puts the information into a dashboard. 
+
+The leaderboards are as follows (up to V1.0):
+
+* Best pitchers by WHIP for a season, including IP, wOBA against, SO/BB/HR per 9
+* Best single outings by Tom Tango game score, including all parts of computation
+* Bet hitters by OPS+, including OBP, SLG, wOBA, and other metrics
+* Best single outings by wOBA, including other hitter metrics
+
+The goal is to show up-to-date best performances across the season and for individual games.
+
+
+Data is up-to-date for 2024 season. See Minor League Data Gathering.Rmd for data gathering.
+
+
+
+# Data Load State
+
+```{r}
+allData <- read.csv('2024 Full MiLB May 13.csv')
+allData <- allData[-1]
+```
+
+
+
+```{r}
+library(dplyr)
+library(stringr)
+library(tidyr)
+library(weights)
+library(beepr)
+```
+
+
+
+
+# Pitcher Results 
+
+This section will gather all of the pitcher information across the season.
+
+
+## Season Performance: Best Pitchers by WHIP
+
+
+At One Level of MiLB Only
+
+```{r}
+pitcherSeason <- allData |>
+  distinct(.keep_all = TRUE) |>
+  filter(result.eventType != 'field_error') |>
+  group_by(matchup.pitcher.id, matchup.pitcher.fullName, home_level_name, fielding_team) |>
+  summarise(IP = sum(case_when(
+    details.isOut == TRUE & result.eventType %in% c('double_play', 'grounded_into_double_play', 
+                                                    'sac_fly_double_play', 'strikeout_double_play') ~ 2,
+    details.isOut == TRUE & !result.eventType %in% c('double_play', 'grounded_into_double_play', 
+                                                    'sac_fly_double_play', 'strikeout_double_play') ~ 1,
+    details.isOut == FALSE ~ 0
+  ), na.rm = TRUE) / 3,
+  SO = sum(ifelse(count.strikes.start == 3, 1, 0), na.rm = TRUE),
+  BB = sum(ifelse(count.balls.start == 4, 1, 0), na.rm = TRUE),
+  HR = sum(ifelse(result.eventType == 'home_run' & details.call.description == 'In play, run(s)', 1, 0),
+           na.rm = TRUE),
+  WHIPNum = sum(ifelse(result.eventType %in% c('walk', 'single', 'double', 'triple', 'home_run') &
+                         (count.balls.start == 4 | 
+                            details.call.description %in% c('In play, no out', 'In play, run(s)')), 1, 0), 
+                na.rm = TRUE),
+  wOBANum = sum(case_when(
+           result.eventType == 'walk' ~ 0.697,
+           result.eventType == 'hit_by_pitch' ~ 0.729,
+           result.eventType == 'single' ~ 0.896,
+           result.eventType == 'double' ~ 1.280,
+           result.eventType == 'triple' ~ 1.626,
+           result.eventType == 'home_run' ~ 2.103,
+           .default = 0
+         ), na.rm = TRUE),
+  wOBADenom = length(unique(paste(startTime,matchup.batter.fullName))) - 
+           sum(ifelse(result.eventType == 'intent_walk', 1, 0), na.rm = TRUE)) |>
+  mutate(WHIP = WHIPNum / IP,
+         wOBA = wOBANum / wOBADenom,
+         SO9 = (SO / IP) * 9,
+         BB9 = (BB / IP) * 9,
+         HR9 = (HR / IP) * 9,
+         IPDecimal = IP - floor(IP),
+         IPWhole = floor(IP)) 
+
+
+cleanSeason <- pitcherSeason |>
+  select(matchup.pitcher.fullName, fielding_team, IPWhole, IPDecimal, SO9, BB9, HR9, wOBA, WHIP) |>
+  mutate(IP = case_when(
+    round(IPDecimal, 1) == 0.3 ~ IPWhole + 0.1,
+    round(IPDecimal, 1) == 0.7 ~ IPWhole + 0.2,
+    .default = IPWhole
+  ),
+  SO9 = round(SO9, 2),
+  BB9 = round(BB9, 2),
+  HR9 = round(HR9, 2),
+  WHIP = round(WHIP, 2),
+  wOBA = rd(wOBA, digits = 3)) |>
+  select(matchup.pitcher.id, matchup.pitcher.fullName, fielding_team, IP, SO9, BB9, HR9, wOBA, WHIP)
+
+cleanSeason
+```
+
+### Top 10 Pitchers by WHIP
+
+Pitchers must have thrown an above-average number of innings to qualify.
+
+```{r}
+averageChecker <- distinctData |>
+  group_by(matchup.pitcher.id) |>
+  summarise(IP = sum(case_when(
+    details.isOut == TRUE & result.eventType %in% c('double_play', 'grounded_into_double_play', 
+                                                    'sac_fly_double_play', 'strikeout_double_play') ~ 2,
+    details.isOut == TRUE & !result.eventType %in% c('double_play', 'grounded_into_double_play', 
+                                                    'sac_fly_double_play', 'strikeout_double_play') ~ 1,
+    details.isOut == FALSE ~ 0
+  ), na.rm = TRUE) / 3)
+
+averageIP <- mean(averageChecker$IP)
+```
+
+
+```{r}
+qualifiedPitchers <- cleanSeason |>
+  filter(IP > floor(averageIP)) |>
+  ungroup() |>
+  mutate(WHIPRank = rank(WHIP, ties.method = 'min'))
+
+topPitchers <- qualifiedPitchers |>
+  filter(WHIPRank <= 10) |>
+  arrange(WHIP) |>
+  select(matchup.pitcher.fullName, fielding_team, home_level_name, IP, SO9, BB9, HR9, wOBA, WHIP)
+
+colnames(topPitchers) <- c('Name', 'Team', 'Level', 'IP', 'K/9', 'BB/9', 'HR/9', 'wOBA', 'WHIP')
+
+topPitchers
+```
+
+
+## Add Organization Info and Logos
+
+```{r}
+library(mlbplotR)
+
+topPitchersOrg <- topPitchers |>
+  mutate(Org = case_when(
+    Team %in% c('Norfolk Tides', 'Bowie Baysox', 'Aberdeen IronBirds', 'Delmarva Shorebirds') ~ 'BAL',
+    Team %in% c('Worcester Red Sox', 'Portland Sea Dogs', 'Greenville Drive', 'Salem Red Sox') ~ 'BOS',
+    Team %in% c('Scranton/Wilkes-Barre RailRiders', 'Somerset Patriots', 'Hudson Valley Renegades', 'Tampa Tarpons') ~ 'NYY',
+    Team %in% c('Durham Bulls', 'Montgomery Biscuits', 'Bowling Green Hot Rods', 'Charleston RiverDogs') ~ 'TB',
+    Team %in% c('Buffalo Bisons', 'New Hampshire Fisher Cats', 'Vancouver Canadians', 'Dunedin Blue Jays') ~ 'TOR',
+    Team %in% c('Charlotte Knights', 'Birmingham Barons', 'Winston-Salem Dash', 'Kannapolis Cannon Ballers') ~ 'CWS',
+    Team %in% c('Columbus Clippers', 'Akron RubberDucks', 'Lake County Captains', 'Lynchburg Hillcats') ~ 'CLE',
+    Team %in% c('Toledo Mud Hens', 'Erie SeaWolves', 'West Michigan Whitecaps', 'Lakeland Flying Tigers') ~ 'DET',
+    Team %in% c('Omaha Storm Chasers', 'Northwest Arkansas Naturals', 'Quad Cities River Bandits', 'Columbia Fireflies') ~ 'KC',
+    Team %in% c('St. Paul Saints', 'Wichita Wind Surge', 'Cedar Rapids Kernels', 'Fort Myers Mighty Mussels') ~ 'MIN',
+    Team %in% c('Sugar Land Space Cowboys', 'Corpus Christi Hooks', 'Asheville Tourists', 'Fayetteville Woodpeckers') ~ 'HOU',
+    Team %in% c('Salt Lake Bees', 'Rocket City Trash Pandas', 'Tri-City Dust Devils', 'Inland Empire 66ers') ~ 'LAA',
+    Team %in% c('Las Vegas Aviators', 'Midland RockHounds', 'Lansing Lugnuts', 'Stockton Ports') ~ 'OAK',
+    Team %in% c('Tacoma Rainiers', 'Arkansas Travelers', 'Everett AquaSox', 'Modesto Nuts') ~ 'SEA',
+    Team %in% c('Round Rock Express', 'Frisco RoughRiders', 'Hickory Crawdads', 'Down East Wood Ducks') ~ 'TEX',
+    Team %in% c('Gwinnett Stripers', 'Mississippi Braves', 'Rome Emperors', 'Augusta GreenJackets') ~ 'ATL',
+    Team %in% c('Jacksonville Jumbo Shrimp', 'Pensacola Blue Wahoos', 'Beloit Sky Carp', 'Jupiter Hammerheads') ~ 'MIA',
+    Team %in% c('Syracuse Mets', 'Binghamton Rumble Ponies', 'Brooklyn Cyclones', 'St. Lucie Mets') ~ 'NYM',
+    Team %in% c('Lehigh Valley IronPigs', 'Reading Fightin Phils', 'Jersey Shore BlueClaws', 'Clearwater Threshers') ~ 'PHI',
+    Team %in% c('Rochester Red Wings', 'Harrisburg Senators', 'Wilmington Blue Rocks', 'Fredericksburg Nationals') ~ 'WSH',
+    Team %in% c('Iowa Cubs', 'Tennessee Smokies', 'South Bend Cubs', 'Myrtle Beach Pelicans') ~ 'CHC',
+    Team %in% c('Louisville Bats', 'Chattanooga Lookouts', 'Dayton Dragons', 'Daytona Tortugas') ~ 'CIN',
+    Team %in% c('Nashville Sounds', 'Biloxi Shuckers', 'Wisconsin Timber Rattlers', 'Carolina Mudcats') ~ 'MIL',
+    Team %in% c('Indianapolis Indians', 'Altoona Curve', 'Greensboro Grasshoppers', 'Bradenton Marauders') ~ 'PIT',
+    Team %in% c('Memphis Redbirds', 'Springfield Cardinals', 'Peoria Chiefs', 'Palm Beach Cardinals') ~ 'STL',
+    Team %in% c('Reno Aces', 'Amarillo Sod Poodles', 'Hillsboro Hops', 'Visalia Rawhide') ~ 'AZ',
+    Team %in% c('Albuquerque Isotopes', 'Hartford Yard Goats', 'Spokane Indians', 'Fresno Grizzlies') ~ 'COL',
+    Team %in% c('Oklahoma City Baseball Club', 'Tulsa Drillers', 'Great Lakes Loons', 'Rancho Cucamonga Quakes') ~ 'LAD',
+    Team %in% c('El Paso Chihuahuas', 'San Antonio Missions', 'Fort Wayne TinCaps', 'Lake Elsinore Storm') ~ 'SD',
+    Team %in% c('Sacramento River Cats', 'Richmond Flying Squirrels', 'Eugene Emeralds', 'San Jose Giants') ~ 'SF',
+    .default = 'MLB'
+  ) 
+  ) |>
+    select(Name, Team, Level, Org, IP, `K/9`, `BB/9`, `HR/9`, wOBA, WHIP)
+
+topPitchersOrg
+```
+
+
+
+```{r}
+library(gt)
+seasonBestPitchers <- topPitchersOrg |>
+  gt() |>
+  tab_header(title = md('**Top MiLB Pitchers by WHIP, 2024**')) |>
+  cols_align(align = 'center', columns = c('Team', 'Level', 'Org', 'IP', 'K/9', 'BB/9', 'HR/9', 'wOBA', 'WHIP')) |>
+  opt_stylize(style = 5, color = 'red') |>
+  cols_width(Name ~ px(175), Team ~ px(175), Level ~ px(90), Org ~ px(90), everything() ~ px(65)) |>
+  tab_footnote(footnote = 'Last Updated May 13th') |>
+  gt_fmt_mlb_logo(columns = 'Org') |>
+  tab_options(
+    table.font.size = px(16)
+  )
+
+seasonBestPitchers
+beep(3)
+```
+
+
+
+## Game Performance: Best Pitchers by Tom Tango Game Score
+
+Formula for the Tango Game Score:
+
+• Start with 40 points
+• Add 2 points for each out recorded (or 6 points per inning)
+• Add 1 additional point for every strikeout
+• Remove 2 points for each walk allowed
+• Remove 2 points for each hit allowed
+• Remove 3 points for each run allowed (earned or unearned)
+• Remove 6 additional points for each home run allowed
+
+
+```{r}
+
+```
+
+
+
+## Season Performance: Best Hitters by OPS+
+
+### Finding Season Averages
+
+
+```{r}
+
+```
+
+
+### Individual Calculations
+
+
+```{r}
+
+```
+
+
+
+## Game Performance: Best Hitters by Number of Bases
+
+
+```{r}
+
+```
+
