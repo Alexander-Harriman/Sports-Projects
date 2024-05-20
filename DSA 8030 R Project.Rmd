@@ -1,0 +1,383 @@
+---
+title: "Does Batting, Pitching, or Defense Win Games?"
+author: "Alexander Harriman"
+output: 
+  html_document:
+    df_print: paged
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    number_sections: true
+    theme: cerulean
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+<img src = "The Killer Bs.webp" width="500"/> 
+
+# Introduction
+It is the question that sparks much debate across fanbases of nearly every sport: does offense or defense win games and championships? Discussions on the topic are vast in Major League Baseball as well. However, baseball has a third aspect of the game: defense. Can a strong pitching staff make up for poor defense behind them? Can good defense and pitching overcome mediocre offense? In this project, offensive and defensive metrics will be analyzed to attempt to answer the age old question: does batting, pitching, or defense win games? And which of the three is most correlated to winning baseball?
+
+***
+
+# Packages
+
+The following R packages were used in this study:
+
+* Lahman, to load the data
+* ggplot2, for plotting measurements
+* ggpubr, for calculating lines of best fit and R^2 values for plots
+* DT, for presenting data tables
+
+```{r, warning = FALSE}
+library(ggplot2)
+library(ggpubr)
+library(DT)
+library(Lahman)
+```
+
+# Data Used
+The Teams datasheet of the Sean Lahman baseball database <https://www.seanlahman.com/baseball-archive/statistics/> will be used for this study. The database is among the most thorough sets of baseball records, containing information about players, salaries, teams, managers, etc. from the earliest days of the sport to the present. The data has been compiled over the past 20 years, with a team of baseball researchers ensuring as much accuracy as possible. Data is loaded into R using the Lahman package.
+
+The Teams table records batting, pitching, and defensive metrics from 1871-2021 across all baseball major leagues. However, since baseball has changed dramatically over the years, this study will focus on data since 1998, when the MLB expanded to its modern-day 30 team size. Fewer teams will lead to a different spread of talent throughout the league, changing the scale of good and bad outcomes for pitching, hitting, and defense.
+
+Since the 2020 season was only 60 games instead of the usual 162, it will be excluded as an extreme outlier.
+
+***
+
+# Loading and Filtering Data {.tabset}
+
+```{r}
+
+fullTeams <- Lahman::Teams
+
+#Filter out pre-1998 and 2020 seasons
+
+filteredTeams <- fullTeams[fullTeams$yearID >= 1998,]
+filteredTeams <- filteredTeams[filteredTeams$yearID != 2020,]
+
+#Removing extraneous columns
+cutNames <- c("attendance","BPF","PPF","park","name","DP","SV","SHO","CG","divID","G","Ghome","DivWin","WCWin","LgWin","WSWin","lgID","teamID","franchID","Rank","L","SO","SB","CS","RA","HA","HRA","BBA","SOA","E","teamIDBR","teamIDlahman45","teamIDretro")
+filteredTeams <- filteredTeams[,!names(filteredTeams) %in% cutNames]
+
+datatable(filteredTeams)
+```
+
+## Filtered Out Columns
+
+* Unedited, the data contains 48 columns. However, several columns within the spreadsheet were not relevant to the study, such as team attendance, park name, and division name.
+
+* Games played was removed; although some teams end up playing more or less than 162 games in a season (thanks to rainouts, tiebreakers, etc.), other columns will be used to take these variations into account more accurately. Similarly, games played at home was removed.
+
+* Results metrics such as saves, shutouts, double plays, etc. were removed since they are either not common enough to play a major factor in the analysis or were not a clear indicator of one of the three aspects of the game this study is analyzing.
+
+* This project focuses on the number of games won, not playoff results. The small sample size of playoff rounds, combined with a lack of playoff-specific data, led to the removal of all columns related to playoff wins.
+
+* Losses can be removed, since there are no options besides winning and losing in baseball.
+
+* Runs allowed is a mix of pitching and defense, since this includes unearned runs scored via an error. This risks inaccurate findings, and thus was omitted.
+
+* Errors are not necessary for this study; outside research suggests that the number of errors a team records is a lesser predictor of defensive capabilities than fielding percentage. Thus, we will focus on fielding percentage instead.
+
+* While research suggests park factors play a significant role in pitching and hitting success, these columns were removed. The study is focused on outcomes, and park factors are best suited as predictors, which is outside of this project's scope. 
+
+* All teams will be ran for each year, so team names are not needed.
+
+***
+
+# Metrics Used {.tabset}
+
+For this study, we will be looking at the following columns:
+
+## Batting 
+
+* **R** - Runs scored.
+* **H, 2B, 3B, HR, BB, HBP, SF, AB** - Each of these metrics keep count of the hits, doubles, triples, home runs, walks, hit by pitches, sacrfice flies, and at-bats of the offense for each team. These metrics will be used to find batting averages, on-base percentages, and slugging percentages. The triple slash will be the primary batting advanced metric used due to the limitations of advanced data available in the dataset.
+
+
+## Pitching
+
+* **ERA** - Earned run average, or the number of runs pitchers allow per 9 innings on average.
+* **ER** - Earned runs, which will be used in calculating other metrics for pitching.
+
+## Fielding
+
+**FP** - Fielding percentage, or the number of putouts and assists (where the fielder throws the ball to someone who records an out) divided by the number of opportunities the fielders get. A more detailed description can be found here: <https://www.mlb.com/glossary/standard-stats/fielding-percentage>
+
+
+## Other columns
+
+**W** - the number of wins a team earned in that season. This is the primary dependent variable.
+
+```{r}
+ggplot(filteredTeams, aes(x = W)) + geom_histogram(bins = 10, fill = 1, color = "orange") + ggtitle("Team Wins in the Regular Season, 1998-2021") + xlab("Wins")
+```
+
+Many MLB teams win an average number of games, typically between 75 and 85 games. Since 81-81 represents a .500 record, we would expect this.
+
+**IPOuts** - the number of outs a pitching team throws each season. This is equal to the number of innings pitched times three. 
+
+
+***
+
+# Pitching Analysis {.tabset}
+
+Pitching will be analyzed first. However, some calculations will be necessary to put teams on the same playing field.
+
+## Finding Runs Allowed per Out
+
+Before diving into the results themselves, it is best to investigate any variance in the amount of baseball teams play across seasons. While the majority of teams play 162 games in a season, some play more or less depending on weather and tiebreaker games.
+
+However, extra innings shifts the amount of baseball teams play.
+
+```{r}
+ggplot(filteredTeams, aes(x = IPouts)) + geom_boxplot(fill = 1, color = "purple") + ggtitle("Outs Recorded by Pitching Team, 1998-2021") + xlab("Outs")
+```
+
+Most teams play around 4300-4350 outs per season. However, the range of outs is over 300 outs, equivalent to 11 extra games.
+
+To account for this, both ERA and Earned runs allowed per Out will be used as pitching metrics.
+
+### Calculating Runs Allowed Per Out
+```{r}
+#Intializing Column
+filteredTeams$RAPerOut <- "None"
+
+#Finding runs allowed per out via R function
+runsPerOut <- function(){
+  for(i in 1:dim(filteredTeams)[1]){
+    filteredTeams$RAPerOut[i] <<- filteredTeams$ER[i] / filteredTeams$IPouts[i] #The double arrow tells R to add to global data, not just local data
+  }
+}
+
+runsPerOut()
+
+#Default values are strings. For plotting and analysis, convert to numeric
+filteredTeams$RAPerOut <- as.numeric(filteredTeams$RAPerOut)
+```
+
+## Plotting Runs Allowed Per Out and ERA
+
+Runs Allowed Per Out and ERA will be the primary metrics used to measure success at pitching. 
+
+Before running an analysis comparing their relationship to Wins, the ERA and Runs Allowed Per Out will be graphed using boxplots and line plots to visualize the values.
+
+```{r}
+ggplot(filteredTeams, aes(x = ERA)) + geom_boxplot(fill = 1, color = "purple") + ggtitle("Earned Run Average by Team, 1998-2021") + xlab("ERA")
+
+ggplot(filteredTeams, aes(x = ERA, y = W)) + geom_point(aes(color = yearID)) + ggtitle("Team Earned Run Average, 1998-2021") + scale_color_continuous("Year") + ylab("Wins")
+
+ggplot(filteredTeams, aes(x = RAPerOut)) + geom_boxplot(fill = 1, color = "orange") + ggtitle("Runs Allowed per Out by Team, 1998-2021") + xlab("Runs/Out")
+```
+
+## Findings
+Most teams average an ERA slightly above 4, with ERAs below 3.5 and above 5 being rare. Simiarly, teams allow about one run every six or seven outs, with the best and worst averaging around one run per eight outs and one run per five outs respectively.
+
+# Pitching and Win Rates {.tabset}
+With the pitching metrics calculated, the next step is to compare these metrics to team win rates. 
+
+## Visual Analysis
+The first step is to plot the relationships between our pitching metrics and Wins.
+
+Both Runs Allowed Per Out and ERA will be independent variables in a linear model, with Wins as the dependent variable. 
+
+```{r, message = FALSE}
+#ERA vs. Wins
+ggplot(filteredTeams, aes(x = W, y = ERA)) + geom_point() + geom_smooth(method = lm, se = FALSE)  + stat_regline_equation(label.y = 6.25, aes(label = ..eq.label..)) +
+  stat_regline_equation(label.y = 6, aes(label = ..rr.label..)) + ggtitle("ERA vs. Team Win Count")
+
+#Runs Allowed per Out
+ggplot(filteredTeams, aes(x = W, y = RAPerOut)) + geom_point() + geom_smooth(method = lm, se = FALSE)  + stat_regline_equation(label.y = .25, aes(label = ..eq.label..)) +
+  stat_regline_equation(label.y = .225, aes(label = ..rr.label..)) + ggtitle("ERA per Out vs. Team Win Count")
+
+```
+
+
+## Results
+
+Both metrics results in an R^2 of 0.44, suggesting that 44% of the variance in winning comes from ERA and Runs Allowed Per Out.
+
+***
+
+# Batting Analysis {.tabset}
+
+Next up is batting. While looking at hits, home runs, etc. on their own will provide insight, these metrics will be combined into team batting average (BA), on-base percentage (OBP), and slugging percentage (SLG) to provide a clearer, more complete picture than the individual results can provide.
+
+Information on calculating these metrics can be found at the following links:
+
+* BA: <https://www.mlb.com/glossary/standard-stats/batting-average>
+* OBP: <https://www.mlb.com/glossary/standard-stats/on-base-percentage>
+* SLG: <https://www.mlb.com/glossary/standard-stats/slugging-percentage>
+
+## Calculating Team Triple Slash {.tabset}
+
+Each metric will be found separately due to the differences in their equations. All three will be new columns in our filtered dataset.
+
+### BA
+
+Batting average records the number of hits over the number of at-bats.
+```{r}
+filteredTeams$BA <- 0
+
+batAvg <- function(){
+  for(i in 1:dim(filteredTeams)[1]){
+    filteredTeams$BA[i] <<- filteredTeams$H[i] / filteredTeams$AB[i]
+  }
+}
+
+batAvg()
+```
+
+### OBP
+
+For the on-base percentage, walks, hit by pitches, and sacrifices are added to our at-bat total. 
+
+```{r}
+filteredTeams$OBP <- 0
+
+obPercent <- function(x){
+  for(i in 1:dim(x)[1]){
+    onBase <- x$H[i] + x$BB[i] + x$HBP[i]
+    opportunities <- x$AB[i] + x$BB[i] + x$HBP[i] + x$SF[i]
+    filteredTeams$OBP[i] <<- onBase / opportunities
+  }
+}
+
+obPercent(filteredTeams)
+```
+
+### SLG
+
+Each hit now counts as the number of bases the hit represents. Singles will be found by subtracting the number of hits by the number of non-singles.
+
+```{r}
+filteredTeams$SLG <- 0
+
+slug <- function(x){
+  for(i in 1:dim(x)[1]){
+    singles <- x$H[i] - x$X2B[i] - x$X3B[i] - x$HR[i]
+    filteredTeams$SLG[i] <<- (singles + (2 * x$X2B[i]) + (3 * x$X3B[i]) + (4 * x$HR[i])) / x$AB[i]
+  }
+}
+
+slug(filteredTeams)
+```
+
+
+## Relationship Between Triple Slash and Runs
+
+With the three triple slash metrics found, a similar analysis as the ERA analysis will take place. 
+
+Each part of the triple slash will be the independent variable of a linear model, with Wins as the dependent. The results are plotted below.
+
+```{r, message = FALSE}
+#BA vs. Wins
+ggplot(filteredTeams, aes(x = W, y = BA)) + geom_point() + geom_smooth(method = lm, se = FALSE)  + stat_regline_equation(label.y = .3, aes(label = ..eq.label..)) +
+  stat_regline_equation(label.y = .275, aes(label = ..rr.label..)) + ggtitle("Batting Average vs. Team Win Count")
+
+#OBP vs. Wins
+ggplot(filteredTeams, aes(x = W, y = OBP)) + geom_point() + geom_smooth(method = lm, se = FALSE)  + stat_regline_equation(label.y = .375, aes(label = ..eq.label..)) +
+  stat_regline_equation(label.y = .35, aes(label = ..rr.label..)) + ggtitle("On Base Percentage vs. Team Win Count")
+
+#SLG vs. Wins
+ggplot(filteredTeams, aes(x = W, y = SLG)) + geom_point() + geom_smooth(method = lm, se = FALSE)  + stat_regline_equation(label.y = .55, aes(label = ..eq.label..)) +
+  stat_regline_equation(label.y = .5, aes(label = ..rr.label..)) + ggtitle("Slugging vs. Team Win Count")
+```
+
+## Findings
+
+The batting average R^2 is only .13, while on-base percentage and slugging both have R^2 values less than 0.3. Therefore, none of the three triple slash metrics explain more of the variance of winning than the pitching metrics.
+
+***
+
+# Runs Scored Analysis {.tabset}
+
+Before moving on from batting metrics, a general measure of runs scored will be run to see if runs scored contribute more to winning than runs allowed.
+
+This will also be used to back up the results of the triple slash analysis.
+
+## Visualizing Runs Scored
+
+Visualizing runs scored will be done with a plot of values. The year will be expressed by the color of the points; if there is a trend of increased or decreased runs scored, the year coloration will indicate it so the model can account for this later.
+```{r}
+ggplot(filteredTeams, aes(x = R, y = W)) + geom_point(aes(color = yearID)) + ggtitle("Runs Scored Over Time, 1998-2021") + xlab("Runs Scored") + ylab("Wins") + scale_color_continuous("Year")
+```
+
+There does not appear to be a numerically significant dropoff in runs scored over time.
+
+## Relationship Between Runs and Wins
+
+Finally, the linear model comparing wins to runs scored will be plotted.
+
+```{r, message = FALSE}
+ggplot(filteredTeams, aes(x = W, y = R)) + geom_point() + geom_smooth(method = lm, se = FALSE)  + stat_regline_equation(label.y = 950, aes(label = ..eq.label..)) +
+  stat_regline_equation(label.y = 900, aes(label = ..rr.label..)) + ggtitle("Runs Scored vs. Team Win Count")
+```
+
+
+## Findings
+The R^2 for runs scored was only 0.32, which is less than the pitching metrics. Thus, batting does not appear to lead to wins on a more consistent basis than pitching does.
+
+***
+
+
+# Fielding {.tabset}
+The data contains fielding percentage values, which allows for analysis of fielding. Although modern advanced fielding metrics are more complex, the dataset does not have enough of the inputs modern defensive metrics require to calculate. Thus, fielding percentage will be used.
+
+## Fielding Percentage
+The first step is to visualize the fielding percentage data, which will be done using a histogram:
+
+```{r}
+ggplot(filteredTeams, aes(x = FP)) + geom_histogram(bins = 5, fill = 1, color = "orange") + ggtitle("Team Fielding Percentage, 1998-2021") + xlab("FP") + ylab("Count")
+```
+
+Many teams have a similar fielding percentage, with very few outliers.
+
+## Fielding Percentage vs. Wins
+
+Next, the linear model comparing fielding percentage to wins will be plotted.
+
+```{r, message = FALSE}
+ggplot(filteredTeams, aes(x = W, y = FP)) + geom_point() + geom_smooth(method = lm, se = FALSE)  + stat_regline_equation(label.y = .99, aes(label = ..eq.label..)) +
+  stat_regline_equation(label.y = .986, aes(label = ..rr.label..)) + ggtitle("Fielding Percentage vs. Team Win Count")
+```
+
+## Findings
+
+An R^2 of 0.11 suggests a poor correlation. Thus, fielding percentage is not a strong indicator of winning baseball games.
+
+
+***
+
+# Conclusion
+
+Based on the linear models and calculations, strong pitching presents the best path towards winning baseball games. Although none of pitching, hitting, and fielding alone fully explain how a baseball team wins in the regular season, pitching values do the best job at explaining the high variance that goes into winning in MLB.
+
+Hitting remains a key aspect of winning in baseball, but not to the same extent as pitching. Meanwhile, fielding is the least significant factor in a team's success based on the fielding percentage.
+
+# Limitations and Future Studies
+
+More metrics can be analyzed to get a better overall view of pitching, hitting, and fielding. Using modern advanced metrics could provide insight that the metrics in this study can not.
+
+Research into the relationships between the three aspects of the game would also improve the clarity of the conclusion.
+
+Future studies could look into playoff data and see if there is a difference once the playoffs begin. With the dataset containing information on division, pennant, and World Series winners, future analysis can also look into the pitching, batting, and fielding metrics of teams that achieve playoff success.
+
+
+***
+
+# Bibliography
+
+ 
+<img src = "Honors College Photo.jpg" width="300"/> 
+ 
+Alexander Harriman is a graduate student in Data Science and Analytics at Clemson University. He is a Graduate Assistant with Clemson Olympic Sports Science, where he conducts data analysis for Clemson Baseball and Clemson Softball. He has also performed sports research with the national champion Clemson United soccer team and the Samford Center for Sports Analytics.
+
+
+# Image Source and Acknowledgement
+
+Red Sox image found courtesy of Heavy.com at the link below: <https://heavy.com/sports/2017/07/what-mlb-baseball-games-are-on-tv-july-4th-today-tonight-schedule/>
+
