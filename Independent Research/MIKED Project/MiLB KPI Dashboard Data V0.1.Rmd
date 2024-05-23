@@ -1,0 +1,172 @@
+---
+title: "MiLB KPI Dashboard Data Gathering"
+author: "Alexander Harriman"
+date: "2024-05-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Load the MiLB Data
+
+
+```{r}
+pitchData <- read.csv('2024 MiLB May 13th.csv')
+```
+
+
+Metrics to track:
+
+From Rangers dashboard
+
+* Bounceback Innings
+* Shutdown Innings
+* Extra Bases Gained on Basepaths (First to third or home on single, 1st to 2nd on fly ball, 2nd to 3rd on fly ball, 2nd to home on single)
+* Stolen Base Conversion 
+* Stolen Bases Against (Check fielder data)
+* Double Play Conversion Rates (may have to stick to overall chances without breaking it down)
+* Inherited Runner Conversion (this may be difficult to code)
+* 1-2-3 Innings
+* Edge Pitch%
+
+
+The information will cover the 2024 MiLB and MLB season for each of the 150 teams. Each metric will be tracked through the entire season and the last 30 days, and ranks will be included to show performance relative to peers and to show trends (for last 30 days).
+
+
+
+```{r}
+library(dplyr)
+library(stringr)
+library(tidyr)
+library(weights)
+library(beepr)
+```
+
+
+# Data Load State
+
+```{r}
+#MiLB
+milbData <- read.csv('2024 Full MiLB May 22.csv')
+#milbData <- fullData
+
+milbData <- milbData[-1]
+milbData <- milbData[-1]
+
+#MLB
+mlbData <- read.csv('2024 MLB May 22.csv')
+mlbData <- mlbData[-1]
+
+allData <- bind_rows(milbData, mlbData)
+
+beep(3)
+```
+
+
+
+# Bounceback Innings: Season
+
+A bounceback inning is where a team scores at least one run immediately after giving up at least one run.
+
+
+## Find Lagged Runs per Game and Inning
+
+```{r}
+laggedRuns <- allData |>
+  distinct(paste(game_pk, startTime, endTime), .keep_all = TRUE) |>
+  mutate(runs_scored = case_when(
+    lead(game_pk) != game_pk ~ 0,
+    about.halfInning == 'top' ~ result.awayScore - lead(result.awayScore), 
+    about.halfInning == 'bottom' ~ result.homeScore - lead(result.homeScore),
+    .default = 0
+  ),
+  halfInnNum = case_when(
+    about.halfInning == 'top' ~ (2 * about.inning) - 1,
+    about.halfInning == 'bottom' ~ (2 * about.inning)
+  )) |>
+  group_by(game_pk, halfInnNum, batting_team, home_level_name) |>
+  summarise(runsScored = sum(runs_scored)) |>
+  ungroup() |>
+  mutate(bouncebackOpp = case_when(
+    halfInnNum == 1 ~ 0,
+    halfInnNum != 1 & lag(runsScored) == 0 ~ 0,
+    halfInnNum != 1 & lag(runsScored) != 0 ~ 1)) |>
+  mutate(bouncebackSuccess = case_when(
+    bouncebackOpp == 0 ~ 0,
+    bouncebackOpp == 1 & runsScored == 0 ~ 0,
+    bouncebackOpp == 1 & runsScored != 0 ~ 1
+  )) 
+
+
+laggedRuns
+```
+
+
+
+
+```{r}
+seasonBouncebackRates <- laggedRuns |>
+  group_by(home_level_name, batting_team) |>
+  summarise(Opps = sum(bouncebackOpp),
+            Success = sum(bouncebackSuccess),
+            SuccessRate = 100.0*(sum(bouncebackSuccess) / sum(bouncebackOpp))) |>
+  ungroup() |>
+  mutate(Org = case_when(
+    batting_team %in% c('Norfolk Tides', 'Bowie Baysox', 'Aberdeen IronBirds', 'Delmarva Shorebirds', 'Baltimore Orioles') ~ 'BAL',
+    batting_team %in% c('Worcester Red Sox', 'Portland Sea Dogs', 'Greenville Drive', 'Salem Red Sox', 'Boston Red Sox') ~ 'BOS',
+    batting_team %in% c('Scranton/Wilkes-Barre RailRiders', 'Somerset Patriots', 'Hudson Valley Renegades', 'Tampa Tarpons', 'New York Yankees') ~ 'NYY',
+    batting_team %in% c('Durham Bulls', 'Montgomery Biscuits', 'Bowling Green Hot Rods', 'Charleston RiverDogs', 'Tampa Bay Rays') ~ 'TB',
+    batting_team %in% c('Buffalo Bisons', 'New Hampshire Fisher Cats', 'Vancouver Canadians', 'Dunedin Blue Jays', 'Toronto Blue Jays') ~ 'TOR',
+    batting_team %in% c('Charlotte Knights', 'Birmingham Barons', 'Winston-Salem Dash', 'Kannapolis Cannon Ballers', 'Chicago White Sox') ~ 'CWS',
+    batting_team %in% c('Columbus Clippers', 'Akron RubberDucks', 'Lake County Captains', 'Lynchburg Hillcats', 'Cleveland Guardians') ~ 'CLE',
+    batting_team %in% c('Toledo Mud Hens', 'Erie SeaWolves', 'West Michigan Whitecaps', 'Lakeland Flying Tigers', 'Detroit Tigers') ~ 'DET',
+    batting_team %in% c('Omaha Storm Chasers', 'Northwest Arkansas Naturals', 'Quad Cities River Bandits', 'Columbia Fireflies', 'Kansas City Royals') ~ 'KC',
+    batting_team %in% c('St. Paul Saints', 'Wichita Wind Surge', 'Cedar Rapids Kernels', 'Fort Myers Mighty Mussels', 'Minnesota Twins') ~ 'MIN',
+    batting_team %in% c('Sugar Land Space Cowboys', 'Corpus Christi Hooks', 'Asheville Tourists', 'Fayetteville Woodpeckers', 'Houston Astros') ~ 'HOU',
+    batting_team %in% c('Salt Lake Bees', 'Rocket City Trash Pandas', 'Tri-City Dust Devils', 'Inland Empire 66ers', 'Los Angeles Angels') ~ 'LAA',
+    batting_team %in% c('Las Vegas Aviators', 'Midland RockHounds', 'Lansing Lugnuts', 'Stockton Ports', 'Oakland Athletics') ~ 'OAK',
+    batting_team %in% c('Tacoma Rainiers', 'Arkansas Travelers', 'Everett AquaSox', 'Modesto Nuts', 'Seattle Mariners') ~ 'SEA',
+    batting_team %in% c('Round Rock Express', 'Frisco RoughRiders', 'Hickory Crawdads', 'Down East Wood Ducks', 'Texas Rangers') ~ 'TEX',
+    batting_team %in% c('Gwinnett Stripers', 'Mississippi Braves', 'Rome Emperors', 'Augusta GreenJackets', 'Atlanta Braves') ~ 'ATL',
+    batting_team %in% c('Jacksonville Jumbo Shrimp', 'Pensacola Blue Wahoos', 'Beloit Sky Carp', 'Jupiter Hammerheads', 'Miami Marlins') ~ 'MIA',
+    batting_team %in% c('Syracuse Mets', 'Binghamton Rumble Ponies', 'Brooklyn Cyclones', 'St. Lucie Mets', 'New York Mets') ~ 'NYM',
+    batting_team %in% c('Lehigh Valley IronPigs', 'Reading Fightin Phils', 'Jersey Shore BlueClaws', 'Clearwater Threshers', 'Philadelphia Phillies') ~ 'PHI',
+    batting_team %in% c('Rochester Red Wings', 'Harrisburg Senators', 'Wilmington Blue Rocks', 'Fredericksburg Nationals', 'Washington Nationals') ~ 'WSH',
+    batting_team %in% c('Iowa Cubs', 'Tennessee Smokies', 'South Bend Cubs', 'Myrtle Beach Pelicans', 'Chicago Cubs') ~ 'CHC',
+    batting_team %in% c('Louisville Bats', 'Chattanooga Lookouts', 'Dayton Dragons', 'Daytona Tortugas', 'Cincinnati Reds') ~ 'CIN',
+    batting_team %in% c('Nashville Sounds', 'Biloxi Shuckers', 'Wisconsin Timber Rattlers', 'Carolina Mudcats', 'Milwaukee Brewers') ~ 'MIL',
+    batting_team %in% c('Indianapolis Indians', 'Altoona Curve', 'Greensboro Grasshoppers', 'Bradenton Marauders', 'Pittsburgh Pirates') ~ 'PIT',
+    batting_team %in% c('Memphis Redbirds', 'Springfield Cardinals', 'Peoria Chiefs', 'Palm Beach Cardinals', 'St. Louis Cardinals') ~ 'STL',
+    batting_team %in% c('Reno Aces', 'Amarillo Sod Poodles', 'Hillsboro Hops', 'Visalia Rawhide', 'Arizona Diamondbacks') ~ 'AZ',
+    batting_team %in% c('Albuquerque Isotopes', 'Hartford Yard Goats', 'Spokane Indians', 'Fresno Grizzlies', 'Colorado Rockies') ~ 'COL',
+    batting_team %in% c('Oklahoma City Baseball Club', 'Tulsa Drillers', 'Great Lakes Loons', 'Rancho Cucamonga Quakes', 'Los Angeles Dodgers') ~ 'LAD',
+    batting_team %in% c('El Paso Chihuahuas', 'San Antonio Missions', 'Fort Wayne TinCaps', 'Lake Elsinore Storm', 'San Diego Padres') ~ 'SD',
+    batting_team %in% c('Sacramento River Cats', 'Richmond Flying Squirrels', 'Eugene Emeralds', 'San Jose Giants', 'San Francisco Giants') ~ 'SF',
+    .default = 'MLB'
+  )) |>
+  group_by(home_level_name) |>
+  mutate(OppsRank = rank(Opps, ties.method = 'random'),
+         SuccessRank = rank(-Success, ties.method = 'random'),
+         RateRank = rank(-SuccessRate, ties.method = 'random')) |>
+  filter(Opps >= 10)
+
+colnames(seasonBouncebackRates) <- c('Level', 'Team', 'Opps', 'Success', 'Rate', 'Org',
+                                     'OppRank', 'SuccessRank', 'RateRank')
+
+seasonBouncebackRates
+```
+
+
+```{r}
+check <- seasonBouncebackRates |>
+  group_by(Org) |>
+  summarise(n = n())
+
+check
+```
+
+
+## Bounceback Innings: Last 30 Days
