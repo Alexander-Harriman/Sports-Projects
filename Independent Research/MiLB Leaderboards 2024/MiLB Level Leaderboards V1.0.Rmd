@@ -1,0 +1,1089 @@
+---
+title: "Minor League Data Gathering"
+author: "Alexander Harriman"
+date: "2024-05-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+This code creates leaderboards for a specific MiLB level and puts the information into a dashboard. 
+
+The leaderboards are as follows (up to V1.0):
+
+* Best pitchers by WHIP for a season, including IP, wOBA against, SO/BB/HR per 9
+* Best single outings by Tom Tango game score, including all parts of computation
+* Bet hitters by OPS+, including OBP, SLG, wOBA, and other metrics
+* Best single outings by wOBA, including other hitter metrics
+* Team metrics for both pitching and hitting
+
+The goal is to show up-to-date best performances across the season and for individual games. Full team information is also exported to be turned into a Tableau dashboard.
+
+
+Data is up-to-date for 2024 season. See Minor League Data Gathering.Rmd for data gathering.
+
+
+
+# Data Load State
+
+```{r}
+allData <- read.csv('2024 Full MiLB May 22.csv')
+
+#Check for how many row index columns exist, and remove that number from this imported file
+##One per write.csv used to create the csv file loaded above
+
+allData <- allData[-1]
+allData <- allData[-1]
+```
+
+
+```{r}
+library(dplyr)
+library(stringr)
+library(tidyr)
+library(weights)
+library(beepr)
+```
+
+
+
+
+# Pitcher Results 
+
+This section will gather all of the pitcher information across the season.
+
+
+## Season Performance: Best Pitchers by WHIP
+
+
+```{r}
+pitcherSeason <- allData |>
+  distinct(paste(game_pk, startTime, endTime), .keep_all = TRUE) |>
+  filter(result.eventType != 'field_error') |>
+  group_by(matchup.pitcher.id, matchup.pitcher.fullName, home_level_name, fielding_team) |>
+  summarise(IP = sum(case_when(
+    details.isOut == TRUE & result.eventType %in% c('double_play', 'grounded_into_double_play', 
+                                                    'sac_fly_double_play', 'strikeout_double_play') ~ 2,
+    details.isOut == TRUE & !result.eventType %in% c('double_play', 'grounded_into_double_play', 
+                                                    'sac_fly_double_play', 'strikeout_double_play') ~ 1,
+    details.isOut == FALSE ~ 0
+  ), na.rm = TRUE) / 3,
+  SO = sum(ifelse(count.strikes.start == 3, 1, 0), na.rm = TRUE),
+  BB = sum(ifelse(count.balls.start == 4, 1, 0), na.rm = TRUE),
+  HR = sum(ifelse(result.eventType == 'home_run' & details.call.description == 'In play, run(s)', 1, 0),
+           na.rm = TRUE),
+  WHIPNum = sum(ifelse(result.eventType %in% c('walk', 'single', 'double', 'triple', 'home_run') &
+                         (count.balls.start == 4 | 
+                            details.call.description %in% c('In play, no out', 'In play, run(s)')), 1, 0), 
+                na.rm = TRUE),
+  wOBANum = sum(case_when(
+           result.eventType == 'walk' ~ 0.697,
+           result.eventType == 'hit_by_pitch' ~ 0.729,
+           result.eventType == 'single' ~ 0.896,
+           result.eventType == 'double' ~ 1.280,
+           result.eventType == 'triple' ~ 1.626,
+           result.eventType == 'home_run' ~ 2.103,
+           .default = 0
+         ), na.rm = TRUE),
+  wOBADenom = length(unique(paste(startTime,matchup.batter.fullName))) - 
+           sum(ifelse(result.eventType == 'intent_walk', 1, 0), na.rm = TRUE)) |>
+  mutate(WHIP = WHIPNum / IP,
+         wOBA = wOBANum / wOBADenom,
+         SO9 = (SO / IP) * 9,
+         BB9 = (BB / IP) * 9,
+         HR9 = (HR / IP) * 9,
+         IPDecimal = IP - floor(IP),
+         IPWhole = floor(IP)) 
+
+
+cleanSeason <- pitcherSeason |>
+  select(matchup.pitcher.fullName, fielding_team, IPWhole, IPDecimal, SO9, BB9, HR9, wOBA, WHIP) |>
+  mutate(IP = case_when(
+    round(IPDecimal, 1) == 0.3 ~ IPWhole + 0.1,
+    round(IPDecimal, 1) == 0.7 ~ IPWhole + 0.2,
+    .default = IPWhole
+  ),
+  SO9 = round(SO9, 2),
+  BB9 = round(BB9, 2),
+  HR9 = round(HR9, 2),
+  wOBA = rd(wOBA, digits = 3)) |>
+  select(matchup.pitcher.id, matchup.pitcher.fullName, fielding_team, IP, SO9, BB9, HR9, wOBA, WHIP)
+
+cleanSeason
+```
+
+### Top 10 Pitchers by WHIP
+
+Pitchers must have thrown an above-average number of innings to qualify.
+
+```{r}
+averageChecker <- allData |>
+  group_by(matchup.pitcher.id) |>
+  summarise(IP = sum(case_when(
+    details.isOut == TRUE & result.eventType %in% c('double_play', 'grounded_into_double_play', 
+                                                    'sac_fly_double_play', 'strikeout_double_play') ~ 2,
+    details.isOut == TRUE & !result.eventType %in% c('double_play', 'grounded_into_double_play', 
+                                                    'sac_fly_double_play', 'strikeout_double_play') ~ 1,
+    details.isOut == FALSE ~ 0
+  ), na.rm = TRUE) / 3)
+
+averageIP <- mean(averageChecker$IP)
+```
+
+
+```{r}
+qualifiedPitchers <- cleanSeason |>
+  filter(IP > floor(averageIP)) |>
+  ungroup() |>
+  select(matchup.pitcher.fullName, fielding_team, home_level_name, IP, SO9, BB9, HR9, wOBA, WHIP)
+
+
+colnames(qualifiedPitchers) <- c('Name', 'Team', 'Level', 'IP', 'K/9', 'BB/9', 'HR/9', 'wOBA', 'WHIP')
+```
+
+
+
+## Add Organization Info and Logos
+
+```{r}
+library(mlbplotR)
+
+topPitchersOrg <- qualifiedPitchers |>
+  mutate(Org = case_when(
+    Team %in% c('Norfolk Tides', 'Bowie Baysox', 'Aberdeen IronBirds', 'Delmarva Shorebirds') ~ 'BAL',
+    Team %in% c('Worcester Red Sox', 'Portland Sea Dogs', 'Greenville Drive', 'Salem Red Sox') ~ 'BOS',
+    Team %in% c('Scranton/Wilkes-Barre RailRiders', 'Somerset Patriots', 'Hudson Valley Renegades', 'Tampa Tarpons') ~ 'NYY',
+    Team %in% c('Durham Bulls', 'Montgomery Biscuits', 'Bowling Green Hot Rods', 'Charleston RiverDogs') ~ 'TB',
+    Team %in% c('Buffalo Bisons', 'New Hampshire Fisher Cats', 'Vancouver Canadians', 'Dunedin Blue Jays') ~ 'TOR',
+    Team %in% c('Charlotte Knights', 'Birmingham Barons', 'Winston-Salem Dash', 'Kannapolis Cannon Ballers') ~ 'CWS',
+    Team %in% c('Columbus Clippers', 'Akron RubberDucks', 'Lake County Captains', 'Lynchburg Hillcats') ~ 'CLE',
+    Team %in% c('Toledo Mud Hens', 'Erie SeaWolves', 'West Michigan Whitecaps', 'Lakeland Flying Tigers') ~ 'DET',
+    Team %in% c('Omaha Storm Chasers', 'Northwest Arkansas Naturals', 'Quad Cities River Bandits', 'Columbia Fireflies') ~ 'KC',
+    Team %in% c('St. Paul Saints', 'Wichita Wind Surge', 'Cedar Rapids Kernels', 'Fort Myers Mighty Mussels') ~ 'MIN',
+    Team %in% c('Sugar Land Space Cowboys', 'Corpus Christi Hooks', 'Asheville Tourists', 'Fayetteville Woodpeckers') ~ 'HOU',
+    Team %in% c('Salt Lake Bees', 'Rocket City Trash Pandas', 'Tri-City Dust Devils', 'Inland Empire 66ers') ~ 'LAA',
+    Team %in% c('Las Vegas Aviators', 'Midland RockHounds', 'Lansing Lugnuts', 'Stockton Ports') ~ 'OAK',
+    Team %in% c('Tacoma Rainiers', 'Arkansas Travelers', 'Everett AquaSox', 'Modesto Nuts') ~ 'SEA',
+    Team %in% c('Round Rock Express', 'Frisco RoughRiders', 'Hickory Crawdads', 'Down East Wood Ducks') ~ 'TEX',
+    Team %in% c('Gwinnett Stripers', 'Mississippi Braves', 'Rome Emperors', 'Augusta GreenJackets') ~ 'ATL',
+    Team %in% c('Jacksonville Jumbo Shrimp', 'Pensacola Blue Wahoos', 'Beloit Sky Carp', 'Jupiter Hammerheads') ~ 'MIA',
+    Team %in% c('Syracuse Mets', 'Binghamton Rumble Ponies', 'Brooklyn Cyclones', 'St. Lucie Mets') ~ 'NYM',
+    Team %in% c('Lehigh Valley IronPigs', 'Reading Fightin Phils', 'Jersey Shore BlueClaws', 'Clearwater Threshers') ~ 'PHI',
+    Team %in% c('Rochester Red Wings', 'Harrisburg Senators', 'Wilmington Blue Rocks', 'Fredericksburg Nationals') ~ 'WSH',
+    Team %in% c('Iowa Cubs', 'Tennessee Smokies', 'South Bend Cubs', 'Myrtle Beach Pelicans') ~ 'CHC',
+    Team %in% c('Louisville Bats', 'Chattanooga Lookouts', 'Dayton Dragons', 'Daytona Tortugas') ~ 'CIN',
+    Team %in% c('Nashville Sounds', 'Biloxi Shuckers', 'Wisconsin Timber Rattlers', 'Carolina Mudcats') ~ 'MIL',
+    Team %in% c('Indianapolis Indians', 'Altoona Curve', 'Greensboro Grasshoppers', 'Bradenton Marauders') ~ 'PIT',
+    Team %in% c('Memphis Redbirds', 'Springfield Cardinals', 'Peoria Chiefs', 'Palm Beach Cardinals') ~ 'STL',
+    Team %in% c('Reno Aces', 'Amarillo Sod Poodles', 'Hillsboro Hops', 'Visalia Rawhide') ~ 'AZ',
+    Team %in% c('Albuquerque Isotopes', 'Hartford Yard Goats', 'Spokane Indians', 'Fresno Grizzlies') ~ 'COL',
+    Team %in% c('Oklahoma City Baseball Club', 'Tulsa Drillers', 'Great Lakes Loons', 'Rancho Cucamonga Quakes') ~ 'LAD',
+    Team %in% c('El Paso Chihuahuas', 'San Antonio Missions', 'Fort Wayne TinCaps', 'Lake Elsinore Storm') ~ 'SD',
+    Team %in% c('Sacramento River Cats', 'Richmond Flying Squirrels', 'Eugene Emeralds', 'San Jose Giants') ~ 'SF',
+    .default = 'MLB'
+  ),
+  League = case_when(
+    Team %in% c('Buffalo Bisons', 'Charlotte Knights', 'Columbus Clippers', 'Durham Bulls', 'Gwinnett Stripers', 'Indianapolis Indians', 'Iowa Cubs', 'Jacksonville Jumbo Shrimp', 'Lehigh Valley IronPigs', 'Louisville Bats', 'Memphis Redbirds', 'Nashville Sounds', 'Norfolk Tides', 'Omaha Storm Chasers', 'Rochester Red Wings', 'Scranton/Wilkes-Barre RailRiders', 'St. Paul Saints', 'Syracuse Mets', 'Toledo Mud Hens', 'Worcester Red Sox') ~ 'International League',
+    Team %in% c('Albuquerque Isotopes', 'El Paso Chihuahuas', 'Las Vegas Aviators', 'Oklahoma City Baseball Club', 'Reno Aces', 'Round Rock Express', 'Sacramento River Cats', 'Salt Lake Bees', 'Sugar Land Space Cowboys', 'Tacoma Rainiers') ~ 'Pacific Coast League',
+    Team %in% c('Akron RubberDucks', 'Altoona Curve', 'Binghamton Rumble Ponies', 'Bowie Baysox', 'Erie SeaWolves', 'Harrisburg Senators', 'Hartford Yard Goats', 'New Hampshire Fisher Cats', 'Portland Sea Dogs', 'Reading Fightin Phils', 'Richmond Flying Squirrels', 'Somerset Patriots') ~ 'Eastern League',
+    Team %in% c('Biloxi Shuckers', 'Birmingham Barons', 'Chattanooga Lookouts', 'Mississippi Braves', 'Montgomery Biscuits', 'Pensacola Blue Wahoos', 'Rocket City Trash Pandas', 'Tennessee Smokies') ~ 'Southern League',
+    Team %in% c('Amarillo Sod Poodles', 'Arkansas Travelers', 'Corpus Christi Hooks', 'Frisco RoughRiders', 'Midland RockHounds', 'Northwest Arkansas Naturals', 'San Antonio Missions', 'Springfield Cardinals', 'Tulsa Drillers', 'Wichita Wind Surge') ~ 'Texas League',
+    Team %in% c('Beloit Sky Carp', 'Cedar Rapids Kernels', 'Dayton Dragons', 'Fort Wayne TinCaps', 'Great Lakes Loons', 'Lake County Captains', 'Lansing Lugnuts', 'Peoria Chiefs', 'Quad Cities River Bandits', 'South Bend Cubs', 'West Michigan Whitecaps', 'Wisconsin Timber Rattlers') ~ 'Midwest League',
+    Team %in% c('Aberdeen IronBirds', 'Asheville Tourists', 'Bowling Green Hot Rods', 'Brooklyn Cyclones', 'Greensboro Grasshoppers', 'Greenville Drive', 'Hickory Crawdads', 'Hudson Valley Renegades', 'Jersey Shore BlueClaws', 'Rome Emperors', 'Wilmington Blue Rocks', 'Winston-Salem Dash') ~ 'South Atlantic League',
+    Team %in% c('Eugene Emeralds', 'Everett AquaSox', 'Hillsboro Hops', 'Spokane Indians', 'Tri-City Dust Devils', 'Vancouver Canadians') ~ 'Northwest League',
+    Team %in% c('Augusta GreenJackets', 'Carolina Mudcats', 'Charleston RiverDogs', 'Columbia Fireflies', 'Delmarva Shorebirds', 'Down East Wood Ducks', 'Fayetteville Woodpeckers', 'Fredericksburg Nationals', 'Kannapolis Cannon Ballers', 'Lynchburg Hillcats', 'Myrtle Beach Pelicans', 'Salem Red Sox') ~ 'Carolina League',
+    Team %in% c('Bradenton Marauders', 'Clearwater Threshers', 'Daytona Tortugas', 'Dunedin Blue Jays', 'Fort Myers Mighty Mussels', 'Jupiter Hammerheads', 'Lakeland Flying Tigers', 'Palm Beach Cardinals', 'St. Lucie Mets', 'Tampa Tarpons') ~ 'Florida State League',
+    Team %in% c('Fresno Grizzlies', 'Inland Empire 66ers', 'Lake Elsinore Storm', 'Modesto Nuts', 'Rancho Cucamonga Quakes', 'San Jose Giants', 'Stockton Ports', 'Visalia Rawhide') ~ 'California League',
+    Team %in% c('Oakland Athletics', 'Los Angeles Angels', 'Houston Astros', 'Texas Rangers', 'Seattle Mariners', 'Minnesota Twins', 'Chicago White Sox', 'Kansas City Royals', 'Cleveland Guardians', 'Detroit Tigers', 'Boston Red Sox', 'New York Yankees', 'Toronto Blue Jays', 'Baltimore Orioles', 'Tampa Bay Rays') ~ 'American League',
+    Team %in% c('New York Mets', 'Philadelphia Phillies', 'Atlanta Braves', 'Miami Marlins', 'Washington Nationals', 'Milwaukee Brewers', 'Chicago Cubs', 'St. Louis Cardinals', 'Pittsburgh Pirates', 'Cincinnati Reds', 'San Francisco Giants', 'Los Angeles Dodgers', 'San Diego Padres', 'Arizona Diamondbacks', 'Colorado Rockies') ~ 'National League',
+    .default = 'MLB'
+  )
+  ) |>
+    select(Name, Team, Level, League, Org, IP, `K/9`, `BB/9`, `HR/9`, wOBA, WHIP)
+
+topPitchersOrg
+```
+
+
+```{r}
+topPitchers <- topPitchersOrg |>
+  mutate(WHIPRank = rank(WHIP, ties.method = 'min')) |>
+  filter(WHIPRank <= 10) |>
+  arrange(WHIP) |>
+  mutate(WHIP = round(WHIP,2)) |>
+  select(Name, Team, Level, League, Org, IP, `K/9`, `BB/9`, `HR/9`, wOBA, WHIP)
+
+topPitchers
+```
+
+
+```{r}
+pitcherSeasonExport <- topPitchersOrg |>
+  group_by(Team, .keep_all = TRUE) |>
+  mutate(ScoreRank = rank(WHIP, ties.method = 'min'))
+
+pitcherSeasonExport
+```
+
+
+```{r}
+write.csv(pitcherSeasonExport, 'MiLB Best Pitchers 2024.csv')
+```
+
+
+
+```{r}
+library(gt)
+seasonBestPitchers <- topPitchers |>
+  gt() |>
+  tab_header(title = md('**Top MiLB Pitchers by WHIP, 2024**')) |>
+  cols_align(align = 'center', columns = c('Team', 'Level', 'League', 'Org', 'IP', 'K/9', 'BB/9', 'HR/9', 'wOBA', 'WHIP')) |>
+  opt_stylize(style = 5, color = 'red') |>
+  cols_width(Name ~ px(200), Team ~ px(200), League ~ px(150), Level ~ px(80), everything() ~ px(60)) |>
+  tab_footnote(footnote = 'Last Updated May 13th') |>
+  gt_fmt_mlb_logo(columns = 'Org') |>
+  tab_options(
+    table.font.size = px(16)
+  )
+
+seasonBestPitchers
+```
+
+
+
+## Game Performance: Best Pitchers by Tom Tango Game Score
+
+Formula for the Tango Game Score:
+
+• Start with 40 points
+• Add 2 points for each out recorded (or 6 points per inning)
+• Add 1 additional point for every strikeout
+• Remove 2 points for each walk allowed
+• Remove 2 points for each hit allowed
+• Remove 3 points for each run allowed (earned or unearned)
+• Remove 6 additional points for each home run allowed
+
+
+```{r}
+pitcherGame <- allData |>
+  distinct(paste(game_pk, startTime, endTime, matchup.pitcher.fullName), .keep_all = TRUE) |>
+  filter(result.eventType != 'field_error') |>
+  mutate(runs_scored = case_when(
+    lead(game_pk) != game_pk ~ 0,
+    about.halfInning == 'top' ~ result.awayScore - lead(result.awayScore), 
+    about.halfInning == 'bottom' ~ result.homeScore - lead(result.homeScore),
+    .default = 0
+  )) |>
+  group_by(game_pk, matchup.pitcher.id, matchup.pitcher.fullName, fielding_team, game_date, home_level_name) |>
+  summarise(Outs = sum(case_when(
+    details.isOut == TRUE & result.eventType %in% c('double_play', 'grounded_into_double_play', 
+                                                    'sac_fly_double_play', 'strikeout_double_play') ~ 2,
+    details.isOut == TRUE & !result.eventType %in% c('double_play', 'grounded_into_double_play', 
+                                                    'sac_fly_double_play', 'strikeout_double_play') ~ 1,
+    details.isOut == FALSE ~ 0
+  ), na.rm = TRUE),
+  SO = sum(ifelse(count.strikes.start == 3, 1, 0), na.rm = TRUE),
+  BB = sum(ifelse(count.balls.start == 4, 1, 0), na.rm = TRUE),
+  HR = sum(ifelse(result.eventType == 'home_run' & details.call.description == 'In play, run(s)', 1, 0),
+           na.rm = TRUE),
+  H = sum(ifelse(
+    result.eventType %in% c('single', 'double', 'triple', 'home_run') & 
+    details.call.description %in% c('In play, no out', 'In play, run(s)'), 1, 0)),
+  RA = sum(runs_scored),
+  .groups = 'keep') |>
+  mutate(game_score = 40 + 2*Outs + SO - 2*BB - 2*H - 3*RA - 6*HR) |>
+  ungroup() |>
+  arrange(desc(game_score)) |>
+  select(matchup.pitcher.fullName, game_date, fielding_team, home_level_name, Outs, SO, BB, H, HR, RA, game_score)
+
+```
+
+
+```{r}
+colnames(pitcherGame) <- c('Name', 'Date', 'Team', 'Level', 'Outs', 'K', 'BB', 'H', 'HR', 'RA', 'Score')
+
+topGameOrg <- pitcherGame |>
+  mutate(Org = case_when(
+    Team %in% c('Norfolk Tides', 'Bowie Baysox', 'Aberdeen IronBirds', 'Delmarva Shorebirds') ~ 'BAL',
+    Team %in% c('Worcester Red Sox', 'Portland Sea Dogs', 'Greenville Drive', 'Salem Red Sox') ~ 'BOS',
+    Team %in% c('Scranton/Wilkes-Barre RailRiders', 'Somerset Patriots', 'Hudson Valley Renegades', 'Tampa Tarpons') ~ 'NYY',
+    Team %in% c('Durham Bulls', 'Montgomery Biscuits', 'Bowling Green Hot Rods', 'Charleston RiverDogs') ~ 'TB',
+    Team %in% c('Buffalo Bisons', 'New Hampshire Fisher Cats', 'Vancouver Canadians', 'Dunedin Blue Jays') ~ 'TOR',
+    Team %in% c('Charlotte Knights', 'Birmingham Barons', 'Winston-Salem Dash', 'Kannapolis Cannon Ballers') ~ 'CWS',
+    Team %in% c('Columbus Clippers', 'Akron RubberDucks', 'Lake County Captains', 'Lynchburg Hillcats') ~ 'CLE',
+    Team %in% c('Toledo Mud Hens', 'Erie SeaWolves', 'West Michigan Whitecaps', 'Lakeland Flying Tigers') ~ 'DET',
+    Team %in% c('Omaha Storm Chasers', 'Northwest Arkansas Naturals', 'Quad Cities River Bandits', 'Columbia Fireflies') ~ 'KC',
+    Team %in% c('St. Paul Saints', 'Wichita Wind Surge', 'Cedar Rapids Kernels', 'Fort Myers Mighty Mussels') ~ 'MIN',
+    Team %in% c('Sugar Land Space Cowboys', 'Corpus Christi Hooks', 'Asheville Tourists', 'Fayetteville Woodpeckers') ~ 'HOU',
+    Team %in% c('Salt Lake Bees', 'Rocket City Trash Pandas', 'Tri-City Dust Devils', 'Inland Empire 66ers') ~ 'LAA',
+    Team %in% c('Las Vegas Aviators', 'Midland RockHounds', 'Lansing Lugnuts', 'Stockton Ports') ~ 'OAK',
+    Team %in% c('Tacoma Rainiers', 'Arkansas Travelers', 'Everett AquaSox', 'Modesto Nuts') ~ 'SEA',
+    Team %in% c('Round Rock Express', 'Frisco RoughRiders', 'Hickory Crawdads', 'Down East Wood Ducks') ~ 'TEX',
+    Team %in% c('Gwinnett Stripers', 'Mississippi Braves', 'Rome Emperors', 'Augusta GreenJackets') ~ 'ATL',
+    Team %in% c('Jacksonville Jumbo Shrimp', 'Pensacola Blue Wahoos', 'Beloit Sky Carp', 'Jupiter Hammerheads') ~ 'MIA',
+    Team %in% c('Syracuse Mets', 'Binghamton Rumble Ponies', 'Brooklyn Cyclones', 'St. Lucie Mets') ~ 'NYM',
+    Team %in% c('Lehigh Valley IronPigs', 'Reading Fightin Phils', 'Jersey Shore BlueClaws', 'Clearwater Threshers') ~ 'PHI',
+    Team %in% c('Rochester Red Wings', 'Harrisburg Senators', 'Wilmington Blue Rocks', 'Fredericksburg Nationals') ~ 'WSH',
+    Team %in% c('Iowa Cubs', 'Tennessee Smokies', 'South Bend Cubs', 'Myrtle Beach Pelicans') ~ 'CHC',
+    Team %in% c('Louisville Bats', 'Chattanooga Lookouts', 'Dayton Dragons', 'Daytona Tortugas') ~ 'CIN',
+    Team %in% c('Nashville Sounds', 'Biloxi Shuckers', 'Wisconsin Timber Rattlers', 'Carolina Mudcats') ~ 'MIL',
+    Team %in% c('Indianapolis Indians', 'Altoona Curve', 'Greensboro Grasshoppers', 'Bradenton Marauders') ~ 'PIT',
+    Team %in% c('Memphis Redbirds', 'Springfield Cardinals', 'Peoria Chiefs', 'Palm Beach Cardinals') ~ 'STL',
+    Team %in% c('Reno Aces', 'Amarillo Sod Poodles', 'Hillsboro Hops', 'Visalia Rawhide') ~ 'AZ',
+    Team %in% c('Albuquerque Isotopes', 'Hartford Yard Goats', 'Spokane Indians', 'Fresno Grizzlies') ~ 'COL',
+    Team %in% c('Oklahoma City Baseball Club', 'Tulsa Drillers', 'Great Lakes Loons', 'Rancho Cucamonga Quakes') ~ 'LAD',
+    Team %in% c('El Paso Chihuahuas', 'San Antonio Missions', 'Fort Wayne TinCaps', 'Lake Elsinore Storm') ~ 'SD',
+    Team %in% c('Sacramento River Cats', 'Richmond Flying Squirrels', 'Eugene Emeralds', 'San Jose Giants') ~ 'SF',
+    .default = 'MLB'
+  ),
+  League = case_when(
+    Team %in% c('Buffalo Bisons', 'Charlotte Knights', 'Columbus Clippers', 'Durham Bulls', 'Gwinnett Stripers', 'Indianapolis Indians', 'Iowa Cubs', 'Jacksonville Jumbo Shrimp', 'Lehigh Valley IronPigs', 'Louisville Bats', 'Memphis Redbirds', 'Nashville Sounds', 'Norfolk Tides', 'Omaha Storm Chasers', 'Rochester Red Wings', 'Scranton/Wilkes-Barre RailRiders', 'St. Paul Saints', 'Syracuse Mets', 'Toledo Mud Hens', 'Worcester Red Sox') ~ 'International League',
+    Team %in% c('Albuquerque Isotopes', 'El Paso Chihuahuas', 'Las Vegas Aviators', 'Oklahoma City Baseball Club', 'Reno Aces', 'Round Rock Express', 'Sacramento River Cats', 'Salt Lake Bees', 'Sugar Land Space Cowboys', 'Tacoma Rainiers') ~ 'Pacific Coast League',
+    Team %in% c('Akron RubberDucks', 'Altoona Curve', 'Binghamton Rumble Ponies', 'Bowie Baysox', 'Erie SeaWolves', 'Harrisburg Senators', 'Hartford Yard Goats', 'New Hampshire Fisher Cats', 'Portland Sea Dogs', 'Reading Fightin Phils', 'Richmond Flying Squirrels', 'Somerset Patriots') ~ 'Eastern League',
+    Team %in% c('Biloxi Shuckers', 'Birmingham Barons', 'Chattanooga Lookouts', 'Mississippi Braves', 'Montgomery Biscuits', 'Pensacola Blue Wahoos', 'Rocket City Trash Pandas', 'Tennessee Smokies') ~ 'Southern League',
+    Team %in% c('Amarillo Sod Poodles', 'Arkansas Travelers', 'Corpus Christi Hooks', 'Frisco RoughRiders', 'Midland RockHounds', 'Northwest Arkansas Naturals', 'San Antonio Missions', 'Springfield Cardinals', 'Tulsa Drillers', 'Wichita Wind Surge') ~ 'Texas League',
+    Team %in% c('Beloit Sky Carp', 'Cedar Rapids Kernels', 'Dayton Dragons', 'Fort Wayne TinCaps', 'Great Lakes Loons', 'Lake County Captains', 'Lansing Lugnuts', 'Peoria Chiefs', 'Quad Cities River Bandits', 'South Bend Cubs', 'West Michigan Whitecaps', 'Wisconsin Timber Rattlers') ~ 'Midwest League',
+    Team %in% c('Aberdeen IronBirds', 'Asheville Tourists', 'Bowling Green Hot Rods', 'Brooklyn Cyclones', 'Greensboro Grasshoppers', 'Greenville Drive', 'Hickory Crawdads', 'Hudson Valley Renegades', 'Jersey Shore BlueClaws', 'Rome Emperors', 'Wilmington Blue Rocks', 'Winston-Salem Dash') ~ 'South Atlantic League',
+    Team %in% c('Eugene Emeralds', 'Everett AquaSox', 'Hillsboro Hops', 'Spokane Indians', 'Tri-City Dust Devils', 'Vancouver Canadians') ~ 'Northwest League',
+    Team %in% c('Augusta GreenJackets', 'Carolina Mudcats', 'Charleston RiverDogs', 'Columbia Fireflies', 'Delmarva Shorebirds', 'Down East Wood Ducks', 'Fayetteville Woodpeckers', 'Fredericksburg Nationals', 'Kannapolis Cannon Ballers', 'Lynchburg Hillcats', 'Myrtle Beach Pelicans', 'Salem Red Sox') ~ 'Carolina League',
+    Team %in% c('Bradenton Marauders', 'Clearwater Threshers', 'Daytona Tortugas', 'Dunedin Blue Jays', 'Fort Myers Mighty Mussels', 'Jupiter Hammerheads', 'Lakeland Flying Tigers', 'Palm Beach Cardinals', 'St. Lucie Mets', 'Tampa Tarpons') ~ 'Florida State League',
+    Team %in% c('Fresno Grizzlies', 'Inland Empire 66ers', 'Lake Elsinore Storm', 'Modesto Nuts', 'Rancho Cucamonga Quakes', 'San Jose Giants', 'Stockton Ports', 'Visalia Rawhide') ~ 'California League',
+    Team %in% c('Oakland Athletics', 'Los Angeles Angels', 'Houston Astros', 'Texas Rangers', 'Seattle Mariners', 'Minnesota Twins', 'Chicago White Sox', 'Kansas City Royals', 'Cleveland Guardians', 'Detroit Tigers', 'Boston Red Sox', 'New York Yankees', 'Toronto Blue Jays', 'Baltimore Orioles', 'Tampa Bay Rays') ~ 'American League',
+    Team %in% c('New York Mets', 'Philadelphia Phillies', 'Atlanta Braves', 'Miami Marlins', 'Washington Nationals', 'Milwaukee Brewers', 'Chicago Cubs', 'St. Louis Cardinals', 'Pittsburgh Pirates', 'Cincinnati Reds', 'San Francisco Giants', 'Los Angeles Dodgers', 'San Diego Padres', 'Arizona Diamondbacks', 'Colorado Rockies') ~ 'National League',
+    .default = 'MLB'
+  )
+  ) |>
+    select(Name, Team, Date, Level, League, Org, Outs, K, BB, H, HR, RA, Score)
+
+topGameOrg
+```
+
+### Clean Up Date
+
+
+```{r}
+topGameOrg <- topGameOrg |>
+  mutate(Date = as.Date(Date)) |>
+  mutate(Date = format(Date, format = '%m-%d'))
+
+topGameOrg
+```
+
+
+
+```{r}
+pitcherGameExport <- topGameOrg |>
+  group_by(Team, .keep_all = TRUE) |>
+  mutate(ScoreRank = rank(desc(Score), ties.method = 'min')) |>
+  filter(ScoreRank <= 10) 
+```
+
+
+```{r}
+write.csv(pitcherGameExport, 'MiLB Best Games by Team.csv')
+```
+
+
+```{r}
+topGameOrg <- topGameOrg |>
+  mutate(ScoreRank = rank(desc(Score), ties.method = 'min')) |>
+  filter(ScoreRank <= 10) |>
+  select(Name, Team, Date, Level, League, Org, Outs, K, BB, H, HR, RA, Score)
+```
+
+
+
+```{r}
+gameBestPitchers <- topGameOrg |>
+  gt() |>
+  tab_header(title = md('**Top MiLB Pitcher Outings by Tango Game Score, 2024**')) |>
+  cols_align(align = 'center', columns = c('Team', 'Level', 'League', 'Date', 'Org', 'Outs', 'K', 'BB', 'H', 'HR', 'RA', 'Score')) |>
+  opt_stylize(style = 5, color = 'blue') |>
+  cols_width(Name ~ px(200), Date ~ px(80), Team ~ px(200), League ~ px(150), Level ~ px(80), everything() ~ px(60)) |>
+  tab_footnote(footnote = 'Last Updated May 20th') |>
+  gt_fmt_mlb_logo(columns = 'Org') |>
+  tab_options(
+    table.font.size = px(16)
+  ) 
+
+gameBestPitchers
+```
+
+
+
+## Season Performance: Best Hitters by OPS+
+
+### Finding Season Averages
+
+
+```{r}
+abCheck <- allData |>
+  distinct(paste(game_pk, atBatIndex), .keep_all = TRUE) |>
+  group_by(paste(game_pk, atBatIndex), home_level_name) |>
+  summarise(isAB = ifelse(!result.eventType %in% c('hit_by_pitch', 'sac_fly', 'intent_walk', 'walk', 'catcher_interf', 'sac_bunt'), 1, 0),
+            slgCount = case_when(
+              result.eventType == 'single' ~ 1,
+              result.eventType == 'double' ~ 2,
+              result.eventType == 'triple' ~ 3,
+              result.eventType == 'home_run' ~ 4,
+              .default = 0))
+
+abByLeague <- abCheck |>
+  group_by(home_level_name) |>
+  summarise(abCount = sum(isAB),
+            SLG = sum(slgCount) / sum(isAB))
+
+abByLeague
+
+  
+obpAverages <- allData |>
+  group_by(home_level_name) |>
+  summarise(OBP = sum(ifelse(result.eventType %in% c('walk', 'hit_by_pitch', 'single', 'double', 'triple', 'home_run') &
+            (count.balls.start == 4 | details.call.description %in% c('In play, no out', 'In play, run(s)', 'Hit By Pitch')),
+            1, 0)) / length(unique(paste(game_pk, atBatIndex))))
+
+colnames(obpAverages) <- c('Drop', 'OBP') #To remove duplicate column name created by grouping
+
+leagueAverages <- cbind(obpAverages, abByLeague) |>
+  select(home_level_name, abCount, OBP, SLG)
+
+leagueAverages
+```
+
+
+### Individual Calculations
+
+
+```{r}
+indABCheck <- allData |>
+  distinct(paste(game_pk, atBatIndex), .keep_all = TRUE) |>
+  group_by(matchup.batter.id, matchup.batter.fullName, home_level_name, batting_team) |>
+  summarise(isAB = ifelse(!result.eventType %in% c('hit_by_pitch', 'sac_fly', 'intent_walk', 'walk', 'catcher_interf', 'sac_bunt'), 1, 0),
+            slgCount = case_when(
+              result.eventType == 'single' ~ 1,
+              result.eventType == 'double' ~ 2,
+              result.eventType == 'triple' ~ 3,
+              result.eventType == 'home_run' ~ 4,
+              .default = 0))
+
+abByPlayer <- indABCheck |>
+  group_by(matchup.batter.id, matchup.batter.fullName, home_level_name, batting_team) |>
+  summarise(abCount = sum(isAB),
+            SLG = sum(slgCount) / sum(isAB))
+
+abByPlayer
+
+indyHittersBasic <- allData |>
+  distinct(paste(game_pk, atBatIndex), .keep_all = TRUE) |>
+  group_by(matchup.batter.id, matchup.batter.fullName, home_level_name, batting_team) |>
+  summarise(PA = length(unique(paste(game_pk, atBatIndex))),
+            SO = sum(ifelse(count.strikes.start == 3, 1, 0), na.rm = TRUE),
+            BB = sum(ifelse(count.balls.start == 4, 1, 0), na.rm = TRUE),
+            HR = sum(ifelse(result.eventType == 'home_run' & details.call.description == 'In play, run(s)', 1, 0),
+                     na.rm = TRUE),
+            H = sum(ifelse(
+              result.eventType %in% c('single', 'double', 'triple', 'home_run') & 
+              details.call.description %in% c('In play, no out', 'In play, run(s)'), 1, 0)))
+
+
+indyHittersAdvanced <- allData |>
+  distinct(paste(game_pk, atBatIndex), .keep_all = TRUE) |>
+  group_by(matchup.batter.id, matchup.batter.fullName, home_level_name, batting_team) |>
+  summarise(OBP = sum(ifelse(result.eventType %in% c('walk', 'hit_by_pitch', 'single', 'double', 'triple', 'home_run') &
+            (count.balls.start == 4 | details.call.description %in% c('In play, no out', 'In play, run(s)', 'Hit By Pitch')),
+            1, 0)) / length(unique(paste(game_pk, atBatIndex))))
+
+indyHitters <- inner_join(indyHittersBasic, indyHittersAdvanced, by = c('matchup.batter.id', 'matchup.batter.fullName', 'home_level_name', 'batting_team'))
+allHitters <- inner_join(indyHitters, abByPlayer, by = c('matchup.batter.id', 'matchup.batter.fullName', 'home_level_name', 'batting_team'))
+```
+
+```{r}
+cleanHitters <- allHitters |>
+  select(matchup.batter.id, matchup.batter.fullName, home_level_name, batting_team, abCount, PA, SO, BB, H, HR, OBP, SLG) |>
+  ungroup() |>
+  mutate(OPS = OBP + SLG)
+
+allHitterInfo <- left_join(cleanHitters, leagueAverages, by = 'home_level_name')
+
+allHitterClean <- allHitterInfo |>
+  mutate(OPSPlus = (100*((OBP.x/OBP.y) + (SLG.x/SLG.y) - 1))) |>
+  select(matchup.batter.fullName, home_level_name, batting_team, abCount.x, PA, OBP.x, SLG.x, OPS, OPSPlus) |>
+  filter(PA >= mean(PA)) |>
+  group_by(batting_team) |>
+  mutate(OPSPlusRank = rank(-OPSPlus)) |>
+  ungroup() |>
+  mutate(OBP.x = rd(OBP.x, 3),
+         SLG.x = rd(SLG.x, 3),
+         OPS = rd(OPS, 3),
+         OPSPlus = round(OPSPlus, 0))
+
+colnames(allHitterClean) <- c('Name', 'Level', 'Team', 'AB', 'PA', 'OBP', 'SLG', 'OPS', 'OPS+', 'Rank')
+
+allHitterClean
+```
+
+
+
+
+```{r}
+topHitterSeason <- allHitterClean |>
+  mutate(Org = case_when(
+    Team %in% c('Norfolk Tides', 'Bowie Baysox', 'Aberdeen IronBirds', 'Delmarva Shorebirds') ~ 'BAL',
+    Team %in% c('Worcester Red Sox', 'Portland Sea Dogs', 'Greenville Drive', 'Salem Red Sox') ~ 'BOS',
+    Team %in% c('Scranton/Wilkes-Barre RailRiders', 'Somerset Patriots', 'Hudson Valley Renegades', 'Tampa Tarpons') ~ 'NYY',
+    Team %in% c('Durham Bulls', 'Montgomery Biscuits', 'Bowling Green Hot Rods', 'Charleston RiverDogs') ~ 'TB',
+    Team %in% c('Buffalo Bisons', 'New Hampshire Fisher Cats', 'Vancouver Canadians', 'Dunedin Blue Jays') ~ 'TOR',
+    Team %in% c('Charlotte Knights', 'Birmingham Barons', 'Winston-Salem Dash', 'Kannapolis Cannon Ballers') ~ 'CWS',
+    Team %in% c('Columbus Clippers', 'Akron RubberDucks', 'Lake County Captains', 'Lynchburg Hillcats') ~ 'CLE',
+    Team %in% c('Toledo Mud Hens', 'Erie SeaWolves', 'West Michigan Whitecaps', 'Lakeland Flying Tigers') ~ 'DET',
+    Team %in% c('Omaha Storm Chasers', 'Northwest Arkansas Naturals', 'Quad Cities River Bandits', 'Columbia Fireflies') ~ 'KC',
+    Team %in% c('St. Paul Saints', 'Wichita Wind Surge', 'Cedar Rapids Kernels', 'Fort Myers Mighty Mussels') ~ 'MIN',
+    Team %in% c('Sugar Land Space Cowboys', 'Corpus Christi Hooks', 'Asheville Tourists', 'Fayetteville Woodpeckers') ~ 'HOU',
+    Team %in% c('Salt Lake Bees', 'Rocket City Trash Pandas', 'Tri-City Dust Devils', 'Inland Empire 66ers') ~ 'LAA',
+    Team %in% c('Las Vegas Aviators', 'Midland RockHounds', 'Lansing Lugnuts', 'Stockton Ports') ~ 'OAK',
+    Team %in% c('Tacoma Rainiers', 'Arkansas Travelers', 'Everett AquaSox', 'Modesto Nuts') ~ 'SEA',
+    Team %in% c('Round Rock Express', 'Frisco RoughRiders', 'Hickory Crawdads', 'Down East Wood Ducks') ~ 'TEX',
+    Team %in% c('Gwinnett Stripers', 'Mississippi Braves', 'Rome Emperors', 'Augusta GreenJackets') ~ 'ATL',
+    Team %in% c('Jacksonville Jumbo Shrimp', 'Pensacola Blue Wahoos', 'Beloit Sky Carp', 'Jupiter Hammerheads') ~ 'MIA',
+    Team %in% c('Syracuse Mets', 'Binghamton Rumble Ponies', 'Brooklyn Cyclones', 'St. Lucie Mets') ~ 'NYM',
+    Team %in% c('Lehigh Valley IronPigs', 'Reading Fightin Phils', 'Jersey Shore BlueClaws', 'Clearwater Threshers') ~ 'PHI',
+    Team %in% c('Rochester Red Wings', 'Harrisburg Senators', 'Wilmington Blue Rocks', 'Fredericksburg Nationals') ~ 'WSH',
+    Team %in% c('Iowa Cubs', 'Tennessee Smokies', 'South Bend Cubs', 'Myrtle Beach Pelicans') ~ 'CHC',
+    Team %in% c('Louisville Bats', 'Chattanooga Lookouts', 'Dayton Dragons', 'Daytona Tortugas') ~ 'CIN',
+    Team %in% c('Nashville Sounds', 'Biloxi Shuckers', 'Wisconsin Timber Rattlers', 'Carolina Mudcats') ~ 'MIL',
+    Team %in% c('Indianapolis Indians', 'Altoona Curve', 'Greensboro Grasshoppers', 'Bradenton Marauders') ~ 'PIT',
+    Team %in% c('Memphis Redbirds', 'Springfield Cardinals', 'Peoria Chiefs', 'Palm Beach Cardinals') ~ 'STL',
+    Team %in% c('Reno Aces', 'Amarillo Sod Poodles', 'Hillsboro Hops', 'Visalia Rawhide') ~ 'AZ',
+    Team %in% c('Albuquerque Isotopes', 'Hartford Yard Goats', 'Spokane Indians', 'Fresno Grizzlies') ~ 'COL',
+    Team %in% c('Oklahoma City Baseball Club', 'Tulsa Drillers', 'Great Lakes Loons', 'Rancho Cucamonga Quakes') ~ 'LAD',
+    Team %in% c('El Paso Chihuahuas', 'San Antonio Missions', 'Fort Wayne TinCaps', 'Lake Elsinore Storm') ~ 'SD',
+    Team %in% c('Sacramento River Cats', 'Richmond Flying Squirrels', 'Eugene Emeralds', 'San Jose Giants') ~ 'SF',
+    .default = 'MLB'
+  ),
+  League = case_when(
+    Team %in% c('Buffalo Bisons', 'Charlotte Knights', 'Columbus Clippers', 'Durham Bulls', 'Gwinnett Stripers', 'Indianapolis Indians', 'Iowa Cubs', 'Jacksonville Jumbo Shrimp', 'Lehigh Valley IronPigs', 'Louisville Bats', 'Memphis Redbirds', 'Nashville Sounds', 'Norfolk Tides', 'Omaha Storm Chasers', 'Rochester Red Wings', 'Scranton/Wilkes-Barre RailRiders', 'St. Paul Saints', 'Syracuse Mets', 'Toledo Mud Hens', 'Worcester Red Sox') ~ 'International League',
+    Team %in% c('Albuquerque Isotopes', 'El Paso Chihuahuas', 'Las Vegas Aviators', 'Oklahoma City Baseball Club', 'Reno Aces', 'Round Rock Express', 'Sacramento River Cats', 'Salt Lake Bees', 'Sugar Land Space Cowboys', 'Tacoma Rainiers') ~ 'Pacific Coast League',
+    Team %in% c('Akron RubberDucks', 'Altoona Curve', 'Binghamton Rumble Ponies', 'Bowie Baysox', 'Erie SeaWolves', 'Harrisburg Senators', 'Hartford Yard Goats', 'New Hampshire Fisher Cats', 'Portland Sea Dogs', 'Reading Fightin Phils', 'Richmond Flying Squirrels', 'Somerset Patriots') ~ 'Eastern League',
+    Team %in% c('Biloxi Shuckers', 'Birmingham Barons', 'Chattanooga Lookouts', 'Mississippi Braves', 'Montgomery Biscuits', 'Pensacola Blue Wahoos', 'Rocket City Trash Pandas', 'Tennessee Smokies') ~ 'Southern League',
+    Team %in% c('Amarillo Sod Poodles', 'Arkansas Travelers', 'Corpus Christi Hooks', 'Frisco RoughRiders', 'Midland RockHounds', 'Northwest Arkansas Naturals', 'San Antonio Missions', 'Springfield Cardinals', 'Tulsa Drillers', 'Wichita Wind Surge') ~ 'Texas League',
+    Team %in% c('Beloit Sky Carp', 'Cedar Rapids Kernels', 'Dayton Dragons', 'Fort Wayne TinCaps', 'Great Lakes Loons', 'Lake County Captains', 'Lansing Lugnuts', 'Peoria Chiefs', 'Quad Cities River Bandits', 'South Bend Cubs', 'West Michigan Whitecaps', 'Wisconsin Timber Rattlers') ~ 'Midwest League',
+    Team %in% c('Aberdeen IronBirds', 'Asheville Tourists', 'Bowling Green Hot Rods', 'Brooklyn Cyclones', 'Greensboro Grasshoppers', 'Greenville Drive', 'Hickory Crawdads', 'Hudson Valley Renegades', 'Jersey Shore BlueClaws', 'Rome Emperors', 'Wilmington Blue Rocks', 'Winston-Salem Dash') ~ 'South Atlantic League',
+    Team %in% c('Eugene Emeralds', 'Everett AquaSox', 'Hillsboro Hops', 'Spokane Indians', 'Tri-City Dust Devils', 'Vancouver Canadians') ~ 'Northwest League',
+    Team %in% c('Augusta GreenJackets', 'Carolina Mudcats', 'Charleston RiverDogs', 'Columbia Fireflies', 'Delmarva Shorebirds', 'Down East Wood Ducks', 'Fayetteville Woodpeckers', 'Fredericksburg Nationals', 'Kannapolis Cannon Ballers', 'Lynchburg Hillcats', 'Myrtle Beach Pelicans', 'Salem Red Sox') ~ 'Carolina League',
+    Team %in% c('Bradenton Marauders', 'Clearwater Threshers', 'Daytona Tortugas', 'Dunedin Blue Jays', 'Fort Myers Mighty Mussels', 'Jupiter Hammerheads', 'Lakeland Flying Tigers', 'Palm Beach Cardinals', 'St. Lucie Mets', 'Tampa Tarpons') ~ 'Florida State League',
+    Team %in% c('Fresno Grizzlies', 'Inland Empire 66ers', 'Lake Elsinore Storm', 'Modesto Nuts', 'Rancho Cucamonga Quakes', 'San Jose Giants', 'Stockton Ports', 'Visalia Rawhide') ~ 'California League',
+    Team %in% c('Oakland Athletics', 'Los Angeles Angels', 'Houston Astros', 'Texas Rangers', 'Seattle Mariners', 'Minnesota Twins', 'Chicago White Sox', 'Kansas City Royals', 'Cleveland Guardians', 'Detroit Tigers', 'Boston Red Sox', 'New York Yankees', 'Toronto Blue Jays', 'Baltimore Orioles', 'Tampa Bay Rays') ~ 'American League',
+    Team %in% c('New York Mets', 'Philadelphia Phillies', 'Atlanta Braves', 'Miami Marlins', 'Washington Nationals', 'Milwaukee Brewers', 'Chicago Cubs', 'St. Louis Cardinals', 'Pittsburgh Pirates', 'Cincinnati Reds', 'San Francisco Giants', 'Los Angeles Dodgers', 'San Diego Padres', 'Arizona Diamondbacks', 'Colorado Rockies') ~ 'National League',
+    .default = 'MLB'
+  ) 
+  ) |>
+    select(Name, Team, Level, League, Org, AB, PA, OBP, SLG, OPS, `OPS+`)
+```
+
+
+```{r}
+write.csv(topHitterSeason, 'MiLB Hitter 2024 Season.csv')
+```
+
+
+```{r}
+topHitterSeason <- allHitterInfo |>
+  mutate(OPSPlus = (100*((OBP.x/OBP.y) + (SLG.x/SLG.y) - 1))) |>
+  select(matchup.batter.fullName, home_level_name, batting_team, abCount.x, PA, OBP.x, SLG.x, OPS, OPSPlus) |>
+  filter(PA >= mean(PA)) |>
+  mutate(OPSPlusRank = rank(-OPSPlus)) |>
+  mutate(OBP.x = rd(OBP.x, 3),
+         SLG.x = rd(SLG.x, 3),
+         OPS = rd(OPS, 3),
+         OPSPlus = round(OPSPlus, 0)) |>
+  filter(OPSPlusRank <= 10)
+
+colnames(topHitterSeason) <- c('Name', 'Level', 'Team', 'AB', 'PA', 'OBP', 'SLG', 'OPS', 'OPS+', 'Rank')
+
+topHitterSeason
+```
+
+```{r}
+topHitterSeason <- topHitterSeason |>
+  mutate(Org = case_when(
+    Team %in% c('Norfolk Tides', 'Bowie Baysox', 'Aberdeen IronBirds', 'Delmarva Shorebirds') ~ 'BAL',
+    Team %in% c('Worcester Red Sox', 'Portland Sea Dogs', 'Greenville Drive', 'Salem Red Sox') ~ 'BOS',
+    Team %in% c('Scranton/Wilkes-Barre RailRiders', 'Somerset Patriots', 'Hudson Valley Renegades', 'Tampa Tarpons') ~ 'NYY',
+    Team %in% c('Durham Bulls', 'Montgomery Biscuits', 'Bowling Green Hot Rods', 'Charleston RiverDogs') ~ 'TB',
+    Team %in% c('Buffalo Bisons', 'New Hampshire Fisher Cats', 'Vancouver Canadians', 'Dunedin Blue Jays') ~ 'TOR',
+    Team %in% c('Charlotte Knights', 'Birmingham Barons', 'Winston-Salem Dash', 'Kannapolis Cannon Ballers') ~ 'CWS',
+    Team %in% c('Columbus Clippers', 'Akron RubberDucks', 'Lake County Captains', 'Lynchburg Hillcats') ~ 'CLE',
+    Team %in% c('Toledo Mud Hens', 'Erie SeaWolves', 'West Michigan Whitecaps', 'Lakeland Flying Tigers') ~ 'DET',
+    Team %in% c('Omaha Storm Chasers', 'Northwest Arkansas Naturals', 'Quad Cities River Bandits', 'Columbia Fireflies') ~ 'KC',
+    Team %in% c('St. Paul Saints', 'Wichita Wind Surge', 'Cedar Rapids Kernels', 'Fort Myers Mighty Mussels') ~ 'MIN',
+    Team %in% c('Sugar Land Space Cowboys', 'Corpus Christi Hooks', 'Asheville Tourists', 'Fayetteville Woodpeckers') ~ 'HOU',
+    Team %in% c('Salt Lake Bees', 'Rocket City Trash Pandas', 'Tri-City Dust Devils', 'Inland Empire 66ers') ~ 'LAA',
+    Team %in% c('Las Vegas Aviators', 'Midland RockHounds', 'Lansing Lugnuts', 'Stockton Ports') ~ 'OAK',
+    Team %in% c('Tacoma Rainiers', 'Arkansas Travelers', 'Everett AquaSox', 'Modesto Nuts') ~ 'SEA',
+    Team %in% c('Round Rock Express', 'Frisco RoughRiders', 'Hickory Crawdads', 'Down East Wood Ducks') ~ 'TEX',
+    Team %in% c('Gwinnett Stripers', 'Mississippi Braves', 'Rome Emperors', 'Augusta GreenJackets') ~ 'ATL',
+    Team %in% c('Jacksonville Jumbo Shrimp', 'Pensacola Blue Wahoos', 'Beloit Sky Carp', 'Jupiter Hammerheads') ~ 'MIA',
+    Team %in% c('Syracuse Mets', 'Binghamton Rumble Ponies', 'Brooklyn Cyclones', 'St. Lucie Mets') ~ 'NYM',
+    Team %in% c('Lehigh Valley IronPigs', 'Reading Fightin Phils', 'Jersey Shore BlueClaws', 'Clearwater Threshers') ~ 'PHI',
+    Team %in% c('Rochester Red Wings', 'Harrisburg Senators', 'Wilmington Blue Rocks', 'Fredericksburg Nationals') ~ 'WSH',
+    Team %in% c('Iowa Cubs', 'Tennessee Smokies', 'South Bend Cubs', 'Myrtle Beach Pelicans') ~ 'CHC',
+    Team %in% c('Louisville Bats', 'Chattanooga Lookouts', 'Dayton Dragons', 'Daytona Tortugas') ~ 'CIN',
+    Team %in% c('Nashville Sounds', 'Biloxi Shuckers', 'Wisconsin Timber Rattlers', 'Carolina Mudcats') ~ 'MIL',
+    Team %in% c('Indianapolis Indians', 'Altoona Curve', 'Greensboro Grasshoppers', 'Bradenton Marauders') ~ 'PIT',
+    Team %in% c('Memphis Redbirds', 'Springfield Cardinals', 'Peoria Chiefs', 'Palm Beach Cardinals') ~ 'STL',
+    Team %in% c('Reno Aces', 'Amarillo Sod Poodles', 'Hillsboro Hops', 'Visalia Rawhide') ~ 'AZ',
+    Team %in% c('Albuquerque Isotopes', 'Hartford Yard Goats', 'Spokane Indians', 'Fresno Grizzlies') ~ 'COL',
+    Team %in% c('Oklahoma City Baseball Club', 'Tulsa Drillers', 'Great Lakes Loons', 'Rancho Cucamonga Quakes') ~ 'LAD',
+    Team %in% c('El Paso Chihuahuas', 'San Antonio Missions', 'Fort Wayne TinCaps', 'Lake Elsinore Storm') ~ 'SD',
+    Team %in% c('Sacramento River Cats', 'Richmond Flying Squirrels', 'Eugene Emeralds', 'San Jose Giants') ~ 'SF',
+    .default = 'MLB'
+  ),
+  League = case_when(
+    Team %in% c('Buffalo Bisons', 'Charlotte Knights', 'Columbus Clippers', 'Durham Bulls', 'Gwinnett Stripers', 'Indianapolis Indians', 'Iowa Cubs', 'Jacksonville Jumbo Shrimp', 'Lehigh Valley IronPigs', 'Louisville Bats', 'Memphis Redbirds', 'Nashville Sounds', 'Norfolk Tides', 'Omaha Storm Chasers', 'Rochester Red Wings', 'Scranton/Wilkes-Barre RailRiders', 'St. Paul Saints', 'Syracuse Mets', 'Toledo Mud Hens', 'Worcester Red Sox') ~ 'International League',
+    Team %in% c('Albuquerque Isotopes', 'El Paso Chihuahuas', 'Las Vegas Aviators', 'Oklahoma City Baseball Club', 'Reno Aces', 'Round Rock Express', 'Sacramento River Cats', 'Salt Lake Bees', 'Sugar Land Space Cowboys', 'Tacoma Rainiers') ~ 'Pacific Coast League',
+    Team %in% c('Akron RubberDucks', 'Altoona Curve', 'Binghamton Rumble Ponies', 'Bowie Baysox', 'Erie SeaWolves', 'Harrisburg Senators', 'Hartford Yard Goats', 'New Hampshire Fisher Cats', 'Portland Sea Dogs', 'Reading Fightin Phils', 'Richmond Flying Squirrels', 'Somerset Patriots') ~ 'Eastern League',
+    Team %in% c('Biloxi Shuckers', 'Birmingham Barons', 'Chattanooga Lookouts', 'Mississippi Braves', 'Montgomery Biscuits', 'Pensacola Blue Wahoos', 'Rocket City Trash Pandas', 'Tennessee Smokies') ~ 'Southern League',
+    Team %in% c('Amarillo Sod Poodles', 'Arkansas Travelers', 'Corpus Christi Hooks', 'Frisco RoughRiders', 'Midland RockHounds', 'Northwest Arkansas Naturals', 'San Antonio Missions', 'Springfield Cardinals', 'Tulsa Drillers', 'Wichita Wind Surge') ~ 'Texas League',
+    Team %in% c('Beloit Sky Carp', 'Cedar Rapids Kernels', 'Dayton Dragons', 'Fort Wayne TinCaps', 'Great Lakes Loons', 'Lake County Captains', 'Lansing Lugnuts', 'Peoria Chiefs', 'Quad Cities River Bandits', 'South Bend Cubs', 'West Michigan Whitecaps', 'Wisconsin Timber Rattlers') ~ 'Midwest League',
+    Team %in% c('Aberdeen IronBirds', 'Asheville Tourists', 'Bowling Green Hot Rods', 'Brooklyn Cyclones', 'Greensboro Grasshoppers', 'Greenville Drive', 'Hickory Crawdads', 'Hudson Valley Renegades', 'Jersey Shore BlueClaws', 'Rome Emperors', 'Wilmington Blue Rocks', 'Winston-Salem Dash') ~ 'South Atlantic League',
+    Team %in% c('Eugene Emeralds', 'Everett AquaSox', 'Hillsboro Hops', 'Spokane Indians', 'Tri-City Dust Devils', 'Vancouver Canadians') ~ 'Northwest League',
+    Team %in% c('Augusta GreenJackets', 'Carolina Mudcats', 'Charleston RiverDogs', 'Columbia Fireflies', 'Delmarva Shorebirds', 'Down East Wood Ducks', 'Fayetteville Woodpeckers', 'Fredericksburg Nationals', 'Kannapolis Cannon Ballers', 'Lynchburg Hillcats', 'Myrtle Beach Pelicans', 'Salem Red Sox') ~ 'Carolina League',
+    Team %in% c('Bradenton Marauders', 'Clearwater Threshers', 'Daytona Tortugas', 'Dunedin Blue Jays', 'Fort Myers Mighty Mussels', 'Jupiter Hammerheads', 'Lakeland Flying Tigers', 'Palm Beach Cardinals', 'St. Lucie Mets', 'Tampa Tarpons') ~ 'Florida State League',
+    Team %in% c('Fresno Grizzlies', 'Inland Empire 66ers', 'Lake Elsinore Storm', 'Modesto Nuts', 'Rancho Cucamonga Quakes', 'San Jose Giants', 'Stockton Ports', 'Visalia Rawhide') ~ 'California League',
+    Team %in% c('Oakland Athletics', 'Los Angeles Angels', 'Houston Astros', 'Texas Rangers', 'Seattle Mariners', 'Minnesota Twins', 'Chicago White Sox', 'Kansas City Royals', 'Cleveland Guardians', 'Detroit Tigers', 'Boston Red Sox', 'New York Yankees', 'Toronto Blue Jays', 'Baltimore Orioles', 'Tampa Bay Rays') ~ 'American League',
+    Team %in% c('New York Mets', 'Philadelphia Phillies', 'Atlanta Braves', 'Miami Marlins', 'Washington Nationals', 'Milwaukee Brewers', 'Chicago Cubs', 'St. Louis Cardinals', 'Pittsburgh Pirates', 'Cincinnati Reds', 'San Francisco Giants', 'Los Angeles Dodgers', 'San Diego Padres', 'Arizona Diamondbacks', 'Colorado Rockies') ~ 'National League',
+    .default = 'MLB'
+  ) 
+  ) |>
+    select(Name, Team, Level, League, Org, AB, PA, OBP, SLG, OPS, `OPS+`)
+```
+
+```{r}
+seasonBestHitters <- topHitterSeason|>
+  gt() |>
+  tab_header(title = md('**Top MiLB Hitters by OPS+, 2024**')) |>
+  cols_align(align = 'center', columns = c('Team', 'Level', 'League', 'Org', 'AB', 'PA', 'OBP', 'SLG', 'OPS', 'OPS+')) |>
+  opt_stylize(style = 5, color = 'blue') |>
+  cols_width(Name ~ px(200), Team ~ px(200), Level ~ px(80), League ~ px(150), everything() ~ px(60)) |>
+  tab_footnote(footnote = 'Last Updated May 22nd') |>
+  gt_fmt_mlb_logo(columns = 'Org') |>
+  tab_options(
+    table.font.size = px(16)
+  ) 
+
+seasonBestHitters
+```
+
+
+
+## Game Performance: Best Hitters by Number of Bases
+
+
+```{r}
+hitterGame <- allData |>
+  distinct(paste(game_pk, startTime, endTime, matchup.batter.fullName), .keep_all = TRUE) |>
+  filter(result.eventType != 'field_error') |>
+  group_by(game_pk, matchup.batter.id, matchup.batter.fullName, batting_team, game_date, home_level_name) |>
+  summarise(PA = length(unique(paste(game_pk, atBatIndex))),
+            BB = sum(ifelse(count.balls.start == 4, 1, 0), na.rm = TRUE),
+            HBP = sum(ifelse(result.eventType == 'hit_by_pitch', 1, 0)),
+            HR = sum(ifelse(result.eventType == 'home_run' & details.call.description == 'In play, run(s)', 1, 0)),
+            H = sum(ifelse(
+              result.eventType %in% c('single', 'double', 'triple', 'home_run') & 
+              details.call.description %in% c('In play, no out', 'In play, run(s)'), 1, 0)),
+            TB = sum(case_when(
+              result.eventType == 'single' & details.call.description %in% c('In play, no out', 'In play, run(s)') ~ 1,
+              result.eventType == 'double' & details.call.description %in% c('In play, no out', 'In play, run(s)') ~ 2,
+              result.eventType == 'triple' & details.call.description %in% c('In play, no out', 'In play, run(s)') ~ 3,
+              result.eventType == 'home_run' & details.call.description %in% c('In play, no out', 'In play, run(s)') ~ 4,
+              .default = 0)),
+            RBI = sum(ifelse(details.call.description %in% c('In play, no out', 'In play, run(s)'), result.rbi, 0))) |>
+  ungroup() |>
+  select(matchup.batter.fullName, batting_team, game_date, home_level_name, PA, H, RBI, HR, BB, HBP, TB) |>
+  filter(PA >= 3)
+
+colnames(hitterGame) <- c('Name', 'Team', 'Date', 'Level', 'PA', 'H', 'RBI', 'HR', 'BB', 'HBP', 'TB')
+            
+hitterGame
+```
+
+
+```{r}
+fullBatterGame <- hitterGame |>
+  mutate(Org = case_when(
+    Team %in% c('Norfolk Tides', 'Bowie Baysox', 'Aberdeen IronBirds', 'Delmarva Shorebirds') ~ 'BAL',
+    Team %in% c('Worcester Red Sox', 'Portland Sea Dogs', 'Greenville Drive', 'Salem Red Sox') ~ 'BOS',
+    Team %in% c('Scranton/Wilkes-Barre RailRiders', 'Somerset Patriots', 'Hudson Valley Renegades', 'Tampa Tarpons') ~ 'NYY',
+    Team %in% c('Durham Bulls', 'Montgomery Biscuits', 'Bowling Green Hot Rods', 'Charleston RiverDogs') ~ 'TB',
+    Team %in% c('Buffalo Bisons', 'New Hampshire Fisher Cats', 'Vancouver Canadians', 'Dunedin Blue Jays') ~ 'TOR',
+    Team %in% c('Charlotte Knights', 'Birmingham Barons', 'Winston-Salem Dash', 'Kannapolis Cannon Ballers') ~ 'CWS',
+    Team %in% c('Columbus Clippers', 'Akron RubberDucks', 'Lake County Captains', 'Lynchburg Hillcats') ~ 'CLE',
+    Team %in% c('Toledo Mud Hens', 'Erie SeaWolves', 'West Michigan Whitecaps', 'Lakeland Flying Tigers') ~ 'DET',
+    Team %in% c('Omaha Storm Chasers', 'Northwest Arkansas Naturals', 'Quad Cities River Bandits', 'Columbia Fireflies') ~ 'KC',
+    Team %in% c('St. Paul Saints', 'Wichita Wind Surge', 'Cedar Rapids Kernels', 'Fort Myers Mighty Mussels') ~ 'MIN',
+    Team %in% c('Sugar Land Space Cowboys', 'Corpus Christi Hooks', 'Asheville Tourists', 'Fayetteville Woodpeckers') ~ 'HOU',
+    Team %in% c('Salt Lake Bees', 'Rocket City Trash Pandas', 'Tri-City Dust Devils', 'Inland Empire 66ers') ~ 'LAA',
+    Team %in% c('Las Vegas Aviators', 'Midland RockHounds', 'Lansing Lugnuts', 'Stockton Ports') ~ 'OAK',
+    Team %in% c('Tacoma Rainiers', 'Arkansas Travelers', 'Everett AquaSox', 'Modesto Nuts') ~ 'SEA',
+    Team %in% c('Round Rock Express', 'Frisco RoughRiders', 'Hickory Crawdads', 'Down East Wood Ducks') ~ 'TEX',
+    Team %in% c('Gwinnett Stripers', 'Mississippi Braves', 'Rome Emperors', 'Augusta GreenJackets') ~ 'ATL',
+    Team %in% c('Jacksonville Jumbo Shrimp', 'Pensacola Blue Wahoos', 'Beloit Sky Carp', 'Jupiter Hammerheads') ~ 'MIA',
+    Team %in% c('Syracuse Mets', 'Binghamton Rumble Ponies', 'Brooklyn Cyclones', 'St. Lucie Mets') ~ 'NYM',
+    Team %in% c('Lehigh Valley IronPigs', 'Reading Fightin Phils', 'Jersey Shore BlueClaws', 'Clearwater Threshers') ~ 'PHI',
+    Team %in% c('Rochester Red Wings', 'Harrisburg Senators', 'Wilmington Blue Rocks', 'Fredericksburg Nationals') ~ 'WSH',
+    Team %in% c('Iowa Cubs', 'Tennessee Smokies', 'South Bend Cubs', 'Myrtle Beach Pelicans') ~ 'CHC',
+    Team %in% c('Louisville Bats', 'Chattanooga Lookouts', 'Dayton Dragons', 'Daytona Tortugas') ~ 'CIN',
+    Team %in% c('Nashville Sounds', 'Biloxi Shuckers', 'Wisconsin Timber Rattlers', 'Carolina Mudcats') ~ 'MIL',
+    Team %in% c('Indianapolis Indians', 'Altoona Curve', 'Greensboro Grasshoppers', 'Bradenton Marauders') ~ 'PIT',
+    Team %in% c('Memphis Redbirds', 'Springfield Cardinals', 'Peoria Chiefs', 'Palm Beach Cardinals') ~ 'STL',
+    Team %in% c('Reno Aces', 'Amarillo Sod Poodles', 'Hillsboro Hops', 'Visalia Rawhide') ~ 'AZ',
+    Team %in% c('Albuquerque Isotopes', 'Hartford Yard Goats', 'Spokane Indians', 'Fresno Grizzlies') ~ 'COL',
+    Team %in% c('Oklahoma City Baseball Club', 'Tulsa Drillers', 'Great Lakes Loons', 'Rancho Cucamonga Quakes') ~ 'LAD',
+    Team %in% c('El Paso Chihuahuas', 'San Antonio Missions', 'Fort Wayne TinCaps', 'Lake Elsinore Storm') ~ 'SD',
+    Team %in% c('Sacramento River Cats', 'Richmond Flying Squirrels', 'Eugene Emeralds', 'San Jose Giants') ~ 'SF',
+    .default = 'MLB'
+  ),
+  League = case_when(
+    Team %in% c('Buffalo Bisons', 'Charlotte Knights', 'Columbus Clippers', 'Durham Bulls', 'Gwinnett Stripers', 'Indianapolis Indians', 'Iowa Cubs', 'Jacksonville Jumbo Shrimp', 'Lehigh Valley IronPigs', 'Louisville Bats', 'Memphis Redbirds', 'Nashville Sounds', 'Norfolk Tides', 'Omaha Storm Chasers', 'Rochester Red Wings', 'Scranton/Wilkes-Barre RailRiders', 'St. Paul Saints', 'Syracuse Mets', 'Toledo Mud Hens', 'Worcester Red Sox') ~ 'International League',
+    Team %in% c('Albuquerque Isotopes', 'El Paso Chihuahuas', 'Las Vegas Aviators', 'Oklahoma City Baseball Club', 'Reno Aces', 'Round Rock Express', 'Sacramento River Cats', 'Salt Lake Bees', 'Sugar Land Space Cowboys', 'Tacoma Rainiers') ~ 'Pacific Coast League',
+    Team %in% c('Akron RubberDucks', 'Altoona Curve', 'Binghamton Rumble Ponies', 'Bowie Baysox', 'Erie SeaWolves', 'Harrisburg Senators', 'Hartford Yard Goats', 'New Hampshire Fisher Cats', 'Portland Sea Dogs', 'Reading Fightin Phils', 'Richmond Flying Squirrels', 'Somerset Patriots') ~ 'Eastern League',
+    Team %in% c('Biloxi Shuckers', 'Birmingham Barons', 'Chattanooga Lookouts', 'Mississippi Braves', 'Montgomery Biscuits', 'Pensacola Blue Wahoos', 'Rocket City Trash Pandas', 'Tennessee Smokies') ~ 'Southern League',
+    Team %in% c('Amarillo Sod Poodles', 'Arkansas Travelers', 'Corpus Christi Hooks', 'Frisco RoughRiders', 'Midland RockHounds', 'Northwest Arkansas Naturals', 'San Antonio Missions', 'Springfield Cardinals', 'Tulsa Drillers', 'Wichita Wind Surge') ~ 'Texas League',
+    Team %in% c('Beloit Sky Carp', 'Cedar Rapids Kernels', 'Dayton Dragons', 'Fort Wayne TinCaps', 'Great Lakes Loons', 'Lake County Captains', 'Lansing Lugnuts', 'Peoria Chiefs', 'Quad Cities River Bandits', 'South Bend Cubs', 'West Michigan Whitecaps', 'Wisconsin Timber Rattlers') ~ 'Midwest League',
+    Team %in% c('Aberdeen IronBirds', 'Asheville Tourists', 'Bowling Green Hot Rods', 'Brooklyn Cyclones', 'Greensboro Grasshoppers', 'Greenville Drive', 'Hickory Crawdads', 'Hudson Valley Renegades', 'Jersey Shore BlueClaws', 'Rome Emperors', 'Wilmington Blue Rocks', 'Winston-Salem Dash') ~ 'South Atlantic League',
+    Team %in% c('Eugene Emeralds', 'Everett AquaSox', 'Hillsboro Hops', 'Spokane Indians', 'Tri-City Dust Devils', 'Vancouver Canadians') ~ 'Northwest League',
+    Team %in% c('Augusta GreenJackets', 'Carolina Mudcats', 'Charleston RiverDogs', 'Columbia Fireflies', 'Delmarva Shorebirds', 'Down East Wood Ducks', 'Fayetteville Woodpeckers', 'Fredericksburg Nationals', 'Kannapolis Cannon Ballers', 'Lynchburg Hillcats', 'Myrtle Beach Pelicans', 'Salem Red Sox') ~ 'Carolina League',
+    Team %in% c('Bradenton Marauders', 'Clearwater Threshers', 'Daytona Tortugas', 'Dunedin Blue Jays', 'Fort Myers Mighty Mussels', 'Jupiter Hammerheads', 'Lakeland Flying Tigers', 'Palm Beach Cardinals', 'St. Lucie Mets', 'Tampa Tarpons') ~ 'Florida State League',
+    Team %in% c('Fresno Grizzlies', 'Inland Empire 66ers', 'Lake Elsinore Storm', 'Modesto Nuts', 'Rancho Cucamonga Quakes', 'San Jose Giants', 'Stockton Ports', 'Visalia Rawhide') ~ 'California League',
+    Team %in% c('Oakland Athletics', 'Los Angeles Angels', 'Houston Astros', 'Texas Rangers', 'Seattle Mariners', 'Minnesota Twins', 'Chicago White Sox', 'Kansas City Royals', 'Cleveland Guardians', 'Detroit Tigers', 'Boston Red Sox', 'New York Yankees', 'Toronto Blue Jays', 'Baltimore Orioles', 'Tampa Bay Rays') ~ 'American League',
+    Team %in% c('New York Mets', 'Philadelphia Phillies', 'Atlanta Braves', 'Miami Marlins', 'Washington Nationals', 'Milwaukee Brewers', 'Chicago Cubs', 'St. Louis Cardinals', 'Pittsburgh Pirates', 'Cincinnati Reds', 'San Francisco Giants', 'Los Angeles Dodgers', 'San Diego Padres', 'Arizona Diamondbacks', 'Colorado Rockies') ~ 'National League',
+    .default = 'MLB'
+  )) 
+```
+
+
+
+
+```{r}
+batterGameExport <- fullBatterGame |>
+  group_by(Team, .keep_all = TRUE) |>
+  mutate(BaseRank = rank(-TB, ties.method = 'random')) |>
+  filter(BaseRank <= 10) 
+```
+
+
+```{r}
+write.csv(batterGameExport, 'MiLB Best Hitter Games 2024.csv')
+```
+
+
+```{r}
+bestBatterGame <- fullBatterGame |>
+  mutate(BaseRank = rank(-TB, ties.method = 'min')) |>
+  filter(BaseRank <= 10) |>
+  mutate(Date = as.Date(Date)) |>
+  mutate(Date = format(Date, format = '%m-%d')) |>
+  select(Name, Team, Date, Level, League, Org, PA, H, BB, HBP, RBI, HR, TB) |>
+  arrange(desc(TB))
+
+
+#Data Corrections
+
+bestBatterGame <- bestBatterGame |>
+  mutate(Date = ifelse(Name == 'Carson McCusker', '05-07', Date))
+
+bestBatterGame
+```
+
+
+
+```{r}
+seasonBestHitterGames <- bestBatterGame |>
+  gt() |>
+  tab_header(title = md('**Most Bases in MiLB Game, 2024**')) |>
+  cols_align(align = 'center', columns = c('Team', 'Date', 'Level', 'League', 'Org', 'PA', 'H', 'BB', 'HBP', 'RBI', 'HR', 'TB')) |>
+  opt_stylize(style = 5, color = 'blue') |>
+  cols_width(Name ~ px(200), Team ~ px(200), Level ~ px(80), League ~ px(150), everything() ~ px(60)) |>
+  tab_footnote(footnote = 'Last Updated May 22nd') |>
+  gt_fmt_mlb_logo(columns = 'Org') |>
+  tab_options(
+    table.font.size = px(16)
+  ) 
+
+seasonBestHitterGames
+```
+
+
+## Team Performance: Pitching
+
+
+```{r}
+pitcherSeason <- allData |>
+  distinct(paste(game_pk, startTime, endTime), .keep_all = TRUE) |>
+  filter(result.eventType != 'field_error') |>
+  group_by(home_level_name, fielding_team) |>
+  summarise(IP = sum(case_when(
+    details.isOut == TRUE & result.eventType %in% c('double_play', 'grounded_into_double_play', 
+                                                    'sac_fly_double_play', 'strikeout_double_play') ~ 2,
+    details.isOut == TRUE & !result.eventType %in% c('double_play', 'grounded_into_double_play', 
+                                                    'sac_fly_double_play', 'strikeout_double_play') ~ 1,
+    details.isOut == FALSE ~ 0
+  ), na.rm = TRUE) / 3,
+  SO = sum(ifelse(count.strikes.start == 3, 1, 0), na.rm = TRUE),
+  BB = sum(ifelse(count.balls.start == 4, 1, 0), na.rm = TRUE),
+  HR = sum(ifelse(result.eventType == 'home_run' & details.call.description == 'In play, run(s)', 1, 0),
+           na.rm = TRUE),
+  WHIPNum = sum(ifelse(result.eventType %in% c('walk', 'single', 'double', 'triple', 'home_run') &
+                         (count.balls.start == 4 | 
+                            details.call.description %in% c('In play, no out', 'In play, run(s)')), 1, 0), 
+                na.rm = TRUE),
+  wOBANum = sum(case_when(
+           result.eventType == 'walk' ~ 0.697,
+           result.eventType == 'hit_by_pitch' ~ 0.729,
+           result.eventType == 'single' ~ 0.896,
+           result.eventType == 'double' ~ 1.280,
+           result.eventType == 'triple' ~ 1.626,
+           result.eventType == 'home_run' ~ 2.103,
+           .default = 0
+         ), na.rm = TRUE),
+  wOBADenom = length(unique(paste(startTime,matchup.batter.fullName))) - 
+           sum(ifelse(result.eventType == 'intent_walk', 1, 0), na.rm = TRUE)) |>
+  mutate(WHIP = WHIPNum / IP,
+         wOBA = wOBANum / wOBADenom,
+         SO9 = (SO / IP) * 9,
+         BB9 = (BB / IP) * 9,
+         HR9 = (HR / IP) * 9,
+         IPDecimal = IP - floor(IP),
+         IPWhole = floor(IP)) 
+
+
+cleanSeason <- pitcherSeason |>
+  select(home_level_name, fielding_team, IPWhole, IPDecimal, SO9, BB9, HR9, wOBA, WHIP) |>
+  mutate(IP = case_when(
+    round(IPDecimal, 1) == 0.3 ~ IPWhole + 0.1,
+    round(IPDecimal, 1) == 0.7 ~ IPWhole + 0.2,
+    .default = IPWhole
+  ),
+  SO9 = round(SO9, 2),
+  BB9 = round(BB9, 2),
+  HR9 = round(HR9, 2)) |>
+  select(fielding_team, IP, SO9, BB9, HR9, wOBA, WHIP) |>
+  group_by(home_level_name) |>
+  mutate(WHIPRank = rank(WHIP, ties.method = 'min'),
+         SO9Rank = rank(-SO9, ties.method = 'min'),
+         BB9Rank = rank(BB9, ties.method = 'min'),
+         HR9Rank = rank(-HR9, ties.method = 'min'),
+         wOBARank = rank(wOBA, ties.method = 'min'),
+         wOBA = rd(wOBA, digits = 3)) |>
+  ungroup()
+
+colnames(cleanSeason) <- c('Level', 'Team', 'IP', 'SO/9', 'BB/9', 'HR/9', 'wOBA', 'WHIP',
+                           'WHIP Rank', 'SO Rank', 'BB Rank', 'HR Rank', 'wOBA Rank')
+
+cleanSeason
+```
+
+```{r}
+pitchingTeam <- cleanSeason |>
+  mutate(Org = case_when(
+    Team %in% c('Norfolk Tides', 'Bowie Baysox', 'Aberdeen IronBirds', 'Delmarva Shorebirds') ~ 'BAL',
+    Team %in% c('Worcester Red Sox', 'Portland Sea Dogs', 'Greenville Drive', 'Salem Red Sox') ~ 'BOS',
+    Team %in% c('Scranton/Wilkes-Barre RailRiders', 'Somerset Patriots', 'Hudson Valley Renegades', 'Tampa Tarpons') ~ 'NYY',
+    Team %in% c('Durham Bulls', 'Montgomery Biscuits', 'Bowling Green Hot Rods', 'Charleston RiverDogs') ~ 'TB',
+    Team %in% c('Buffalo Bisons', 'New Hampshire Fisher Cats', 'Vancouver Canadians', 'Dunedin Blue Jays') ~ 'TOR',
+    Team %in% c('Charlotte Knights', 'Birmingham Barons', 'Winston-Salem Dash', 'Kannapolis Cannon Ballers') ~ 'CWS',
+    Team %in% c('Columbus Clippers', 'Akron RubberDucks', 'Lake County Captains', 'Lynchburg Hillcats') ~ 'CLE',
+    Team %in% c('Toledo Mud Hens', 'Erie SeaWolves', 'West Michigan Whitecaps', 'Lakeland Flying Tigers') ~ 'DET',
+    Team %in% c('Omaha Storm Chasers', 'Northwest Arkansas Naturals', 'Quad Cities River Bandits', 'Columbia Fireflies') ~ 'KC',
+    Team %in% c('St. Paul Saints', 'Wichita Wind Surge', 'Cedar Rapids Kernels', 'Fort Myers Mighty Mussels') ~ 'MIN',
+    Team %in% c('Sugar Land Space Cowboys', 'Corpus Christi Hooks', 'Asheville Tourists', 'Fayetteville Woodpeckers') ~ 'HOU',
+    Team %in% c('Salt Lake Bees', 'Rocket City Trash Pandas', 'Tri-City Dust Devils', 'Inland Empire 66ers') ~ 'LAA',
+    Team %in% c('Las Vegas Aviators', 'Midland RockHounds', 'Lansing Lugnuts', 'Stockton Ports') ~ 'OAK',
+    Team %in% c('Tacoma Rainiers', 'Arkansas Travelers', 'Everett AquaSox', 'Modesto Nuts') ~ 'SEA',
+    Team %in% c('Round Rock Express', 'Frisco RoughRiders', 'Hickory Crawdads', 'Down East Wood Ducks') ~ 'TEX',
+    Team %in% c('Gwinnett Stripers', 'Mississippi Braves', 'Rome Emperors', 'Augusta GreenJackets') ~ 'ATL',
+    Team %in% c('Jacksonville Jumbo Shrimp', 'Pensacola Blue Wahoos', 'Beloit Sky Carp', 'Jupiter Hammerheads') ~ 'MIA',
+    Team %in% c('Syracuse Mets', 'Binghamton Rumble Ponies', 'Brooklyn Cyclones', 'St. Lucie Mets') ~ 'NYM',
+    Team %in% c('Lehigh Valley IronPigs', 'Reading Fightin Phils', 'Jersey Shore BlueClaws', 'Clearwater Threshers') ~ 'PHI',
+    Team %in% c('Rochester Red Wings', 'Harrisburg Senators', 'Wilmington Blue Rocks', 'Fredericksburg Nationals') ~ 'WSH',
+    Team %in% c('Iowa Cubs', 'Tennessee Smokies', 'South Bend Cubs', 'Myrtle Beach Pelicans') ~ 'CHC',
+    Team %in% c('Louisville Bats', 'Chattanooga Lookouts', 'Dayton Dragons', 'Daytona Tortugas') ~ 'CIN',
+    Team %in% c('Nashville Sounds', 'Biloxi Shuckers', 'Wisconsin Timber Rattlers', 'Carolina Mudcats') ~ 'MIL',
+    Team %in% c('Indianapolis Indians', 'Altoona Curve', 'Greensboro Grasshoppers', 'Bradenton Marauders') ~ 'PIT',
+    Team %in% c('Memphis Redbirds', 'Springfield Cardinals', 'Peoria Chiefs', 'Palm Beach Cardinals') ~ 'STL',
+    Team %in% c('Reno Aces', 'Amarillo Sod Poodles', 'Hillsboro Hops', 'Visalia Rawhide') ~ 'AZ',
+    Team %in% c('Albuquerque Isotopes', 'Hartford Yard Goats', 'Spokane Indians', 'Fresno Grizzlies') ~ 'COL',
+    Team %in% c('Oklahoma City Baseball Club', 'Tulsa Drillers', 'Great Lakes Loons', 'Rancho Cucamonga Quakes') ~ 'LAD',
+    Team %in% c('El Paso Chihuahuas', 'San Antonio Missions', 'Fort Wayne TinCaps', 'Lake Elsinore Storm') ~ 'SD',
+    Team %in% c('Sacramento River Cats', 'Richmond Flying Squirrels', 'Eugene Emeralds', 'San Jose Giants') ~ 'SF',
+    .default = 'MLB'
+  ),
+  League = case_when(
+    Team %in% c('Buffalo Bisons', 'Charlotte Knights', 'Columbus Clippers', 'Durham Bulls', 'Gwinnett Stripers', 'Indianapolis Indians', 'Iowa Cubs', 'Jacksonville Jumbo Shrimp', 'Lehigh Valley IronPigs', 'Louisville Bats', 'Memphis Redbirds', 'Nashville Sounds', 'Norfolk Tides', 'Omaha Storm Chasers', 'Rochester Red Wings', 'Scranton/Wilkes-Barre RailRiders', 'St. Paul Saints', 'Syracuse Mets', 'Toledo Mud Hens', 'Worcester Red Sox') ~ 'International League',
+    Team %in% c('Albuquerque Isotopes', 'El Paso Chihuahuas', 'Las Vegas Aviators', 'Oklahoma City Baseball Club', 'Reno Aces', 'Round Rock Express', 'Sacramento River Cats', 'Salt Lake Bees', 'Sugar Land Space Cowboys', 'Tacoma Rainiers') ~ 'Pacific Coast League',
+    Team %in% c('Akron RubberDucks', 'Altoona Curve', 'Binghamton Rumble Ponies', 'Bowie Baysox', 'Erie SeaWolves', 'Harrisburg Senators', 'Hartford Yard Goats', 'New Hampshire Fisher Cats', 'Portland Sea Dogs', 'Reading Fightin Phils', 'Richmond Flying Squirrels', 'Somerset Patriots') ~ 'Eastern League',
+    Team %in% c('Biloxi Shuckers', 'Birmingham Barons', 'Chattanooga Lookouts', 'Mississippi Braves', 'Montgomery Biscuits', 'Pensacola Blue Wahoos', 'Rocket City Trash Pandas', 'Tennessee Smokies') ~ 'Southern League',
+    Team %in% c('Amarillo Sod Poodles', 'Arkansas Travelers', 'Corpus Christi Hooks', 'Frisco RoughRiders', 'Midland RockHounds', 'Northwest Arkansas Naturals', 'San Antonio Missions', 'Springfield Cardinals', 'Tulsa Drillers', 'Wichita Wind Surge') ~ 'Texas League',
+    Team %in% c('Beloit Sky Carp', 'Cedar Rapids Kernels', 'Dayton Dragons', 'Fort Wayne TinCaps', 'Great Lakes Loons', 'Lake County Captains', 'Lansing Lugnuts', 'Peoria Chiefs', 'Quad Cities River Bandits', 'South Bend Cubs', 'West Michigan Whitecaps', 'Wisconsin Timber Rattlers') ~ 'Midwest League',
+    Team %in% c('Aberdeen IronBirds', 'Asheville Tourists', 'Bowling Green Hot Rods', 'Brooklyn Cyclones', 'Greensboro Grasshoppers', 'Greenville Drive', 'Hickory Crawdads', 'Hudson Valley Renegades', 'Jersey Shore BlueClaws', 'Rome Emperors', 'Wilmington Blue Rocks', 'Winston-Salem Dash') ~ 'South Atlantic League',
+    Team %in% c('Eugene Emeralds', 'Everett AquaSox', 'Hillsboro Hops', 'Spokane Indians', 'Tri-City Dust Devils', 'Vancouver Canadians') ~ 'Northwest League',
+    Team %in% c('Augusta GreenJackets', 'Carolina Mudcats', 'Charleston RiverDogs', 'Columbia Fireflies', 'Delmarva Shorebirds', 'Down East Wood Ducks', 'Fayetteville Woodpeckers', 'Fredericksburg Nationals', 'Kannapolis Cannon Ballers', 'Lynchburg Hillcats', 'Myrtle Beach Pelicans', 'Salem Red Sox') ~ 'Carolina League',
+    Team %in% c('Bradenton Marauders', 'Clearwater Threshers', 'Daytona Tortugas', 'Dunedin Blue Jays', 'Fort Myers Mighty Mussels', 'Jupiter Hammerheads', 'Lakeland Flying Tigers', 'Palm Beach Cardinals', 'St. Lucie Mets', 'Tampa Tarpons') ~ 'Florida State League',
+    Team %in% c('Fresno Grizzlies', 'Inland Empire 66ers', 'Lake Elsinore Storm', 'Modesto Nuts', 'Rancho Cucamonga Quakes', 'San Jose Giants', 'Stockton Ports', 'Visalia Rawhide') ~ 'California League',
+    Team %in% c('Oakland Athletics', 'Los Angeles Angels', 'Houston Astros', 'Texas Rangers', 'Seattle Mariners', 'Minnesota Twins', 'Chicago White Sox', 'Kansas City Royals', 'Cleveland Guardians', 'Detroit Tigers', 'Boston Red Sox', 'New York Yankees', 'Toronto Blue Jays', 'Baltimore Orioles', 'Tampa Bay Rays') ~ 'American League',
+    Team %in% c('New York Mets', 'Philadelphia Phillies', 'Atlanta Braves', 'Miami Marlins', 'Washington Nationals', 'Milwaukee Brewers', 'Chicago Cubs', 'St. Louis Cardinals', 'Pittsburgh Pirates', 'Cincinnati Reds', 'San Francisco Giants', 'Los Angeles Dodgers', 'San Diego Padres', 'Arizona Diamondbacks', 'Colorado Rockies') ~ 'National League',
+    .default = 'MLB'
+  )) 
+```
+
+```{r}
+write.csv(cleanSeason, 'MiLB Team Pitching Rankings.csv')
+```
+
+
+## Team Performance: Hitting
+
+
+```{r}
+indABCheck <- allData |>
+  distinct(paste(game_pk, atBatIndex), .keep_all = TRUE) |>
+  group_by(home_level_name, batting_team) |>
+  summarise(isAB = ifelse(!result.eventType %in% c('hit_by_pitch', 'sac_fly', 'intent_walk', 'walk', 'catcher_interf', 'sac_bunt'), 1, 0),
+            slgCount = case_when(
+              result.eventType == 'single' ~ 1,
+              result.eventType == 'double' ~ 2,
+              result.eventType == 'triple' ~ 3,
+              result.eventType == 'home_run' ~ 4,
+              .default = 0))
+
+abByPlayer <- indABCheck |>
+  group_by(home_level_name, batting_team) |>
+  summarise(abCount = sum(isAB),
+            SLG = sum(slgCount) / sum(isAB))
+
+abByPlayer
+
+indyHittersBasic <- allData |>
+  distinct(paste(game_pk, atBatIndex), .keep_all = TRUE) |>
+  group_by(home_level_name, batting_team) |>
+  summarise(PA = length(unique(paste(game_pk, atBatIndex))),
+            SO = sum(ifelse(count.strikes.start == 3, 1, 0), na.rm = TRUE),
+            BB = sum(ifelse(count.balls.start == 4, 1, 0), na.rm = TRUE),
+            HR = sum(ifelse(result.eventType == 'home_run' & details.call.description == 'In play, run(s)', 1, 0),
+                     na.rm = TRUE),
+            H = sum(ifelse(
+              result.eventType %in% c('single', 'double', 'triple', 'home_run') & 
+              details.call.description %in% c('In play, no out', 'In play, run(s)'), 1, 0)))
+
+
+indyHittersAdvanced <- allData |>
+  distinct(paste(game_pk, atBatIndex), .keep_all = TRUE) |>
+  group_by(home_level_name, batting_team) |>
+  summarise(OBP = sum(ifelse(result.eventType %in% c('walk', 'hit_by_pitch', 'single', 'double', 'triple', 'home_run') &
+            (count.balls.start == 4 | details.call.description %in% c('In play, no out', 'In play, run(s)', 'Hit By Pitch')),
+            1, 0)) / length(unique(paste(game_pk, atBatIndex))))
+
+indyHitters <- inner_join(indyHittersBasic, indyHittersAdvanced, by = c('home_level_name', 'batting_team'))
+allHitters <- inner_join(indyHitters, abByPlayer, by = c('home_level_name', 'batting_team'))
+```
+
+```{r}
+cleanHitters <- allHitters |>
+  select(home_level_name, batting_team, abCount, PA, SO, BB, H, HR, OBP, SLG) |>
+  ungroup() |>
+  mutate(OPS = OBP + SLG)
+
+allHitterInfo <- left_join(cleanHitters, leagueAverages, by = 'home_level_name')
+
+allHitterClean <- allHitterInfo |>
+  mutate(OPSPlus = (100*((OBP.x/OBP.y) + (SLG.x/SLG.y) - 1))) |>
+  select(home_level_name, batting_team, abCount.x, PA, OBP.x, SLG.x, OPS, OPSPlus) |>
+  group_by(home_level_name) |>
+  mutate(OBPRank = rank(-OBP.x, ties.method = 'min'),
+         SLGRank = rank(-SLG.x, ties.method = 'min'),
+         OPSRank = rank(-OPS, ties.method = 'min'),
+         OPSPlusRank = rank(-OPSPlus, ties.method = 'min')) |>
+  ungroup() |>
+  mutate(OBP.x = rd(OBP.x, 3),
+         SLG.x = rd(SLG.x, 3),
+         OPS = rd(OPS, 3),
+         OPSPlus = round(OPSPlus, 0))
+
+colnames(allHitterClean) <- c('Level', 'Team', 'AB', 'PA', 'OBP', 'SLG', 'OPS', 'OPS+', 
+                              'OPS+ Rank', 'OBP Rank', 'SLG Rank', 'OPS Rank')
+
+allHitterClean
+```
+
+
+
+
+```{r}
+topHitterSeason <- allHitterClean |>
+  mutate(Org = case_when(
+    Team %in% c('Norfolk Tides', 'Bowie Baysox', 'Aberdeen IronBirds', 'Delmarva Shorebirds') ~ 'BAL',
+    Team %in% c('Worcester Red Sox', 'Portland Sea Dogs', 'Greenville Drive', 'Salem Red Sox') ~ 'BOS',
+    Team %in% c('Scranton/Wilkes-Barre RailRiders', 'Somerset Patriots', 'Hudson Valley Renegades', 'Tampa Tarpons') ~ 'NYY',
+    Team %in% c('Durham Bulls', 'Montgomery Biscuits', 'Bowling Green Hot Rods', 'Charleston RiverDogs') ~ 'TB',
+    Team %in% c('Buffalo Bisons', 'New Hampshire Fisher Cats', 'Vancouver Canadians', 'Dunedin Blue Jays') ~ 'TOR',
+    Team %in% c('Charlotte Knights', 'Birmingham Barons', 'Winston-Salem Dash', 'Kannapolis Cannon Ballers') ~ 'CWS',
+    Team %in% c('Columbus Clippers', 'Akron RubberDucks', 'Lake County Captains', 'Lynchburg Hillcats') ~ 'CLE',
+    Team %in% c('Toledo Mud Hens', 'Erie SeaWolves', 'West Michigan Whitecaps', 'Lakeland Flying Tigers') ~ 'DET',
+    Team %in% c('Omaha Storm Chasers', 'Northwest Arkansas Naturals', 'Quad Cities River Bandits', 'Columbia Fireflies') ~ 'KC',
+    Team %in% c('St. Paul Saints', 'Wichita Wind Surge', 'Cedar Rapids Kernels', 'Fort Myers Mighty Mussels') ~ 'MIN',
+    Team %in% c('Sugar Land Space Cowboys', 'Corpus Christi Hooks', 'Asheville Tourists', 'Fayetteville Woodpeckers') ~ 'HOU',
+    Team %in% c('Salt Lake Bees', 'Rocket City Trash Pandas', 'Tri-City Dust Devils', 'Inland Empire 66ers') ~ 'LAA',
+    Team %in% c('Las Vegas Aviators', 'Midland RockHounds', 'Lansing Lugnuts', 'Stockton Ports') ~ 'OAK',
+    Team %in% c('Tacoma Rainiers', 'Arkansas Travelers', 'Everett AquaSox', 'Modesto Nuts') ~ 'SEA',
+    Team %in% c('Round Rock Express', 'Frisco RoughRiders', 'Hickory Crawdads', 'Down East Wood Ducks') ~ 'TEX',
+    Team %in% c('Gwinnett Stripers', 'Mississippi Braves', 'Rome Emperors', 'Augusta GreenJackets') ~ 'ATL',
+    Team %in% c('Jacksonville Jumbo Shrimp', 'Pensacola Blue Wahoos', 'Beloit Sky Carp', 'Jupiter Hammerheads') ~ 'MIA',
+    Team %in% c('Syracuse Mets', 'Binghamton Rumble Ponies', 'Brooklyn Cyclones', 'St. Lucie Mets') ~ 'NYM',
+    Team %in% c('Lehigh Valley IronPigs', 'Reading Fightin Phils', 'Jersey Shore BlueClaws', 'Clearwater Threshers') ~ 'PHI',
+    Team %in% c('Rochester Red Wings', 'Harrisburg Senators', 'Wilmington Blue Rocks', 'Fredericksburg Nationals') ~ 'WSH',
+    Team %in% c('Iowa Cubs', 'Tennessee Smokies', 'South Bend Cubs', 'Myrtle Beach Pelicans') ~ 'CHC',
+    Team %in% c('Louisville Bats', 'Chattanooga Lookouts', 'Dayton Dragons', 'Daytona Tortugas') ~ 'CIN',
+    Team %in% c('Nashville Sounds', 'Biloxi Shuckers', 'Wisconsin Timber Rattlers', 'Carolina Mudcats') ~ 'MIL',
+    Team %in% c('Indianapolis Indians', 'Altoona Curve', 'Greensboro Grasshoppers', 'Bradenton Marauders') ~ 'PIT',
+    Team %in% c('Memphis Redbirds', 'Springfield Cardinals', 'Peoria Chiefs', 'Palm Beach Cardinals') ~ 'STL',
+    Team %in% c('Reno Aces', 'Amarillo Sod Poodles', 'Hillsboro Hops', 'Visalia Rawhide') ~ 'AZ',
+    Team %in% c('Albuquerque Isotopes', 'Hartford Yard Goats', 'Spokane Indians', 'Fresno Grizzlies') ~ 'COL',
+    Team %in% c('Oklahoma City Baseball Club', 'Tulsa Drillers', 'Great Lakes Loons', 'Rancho Cucamonga Quakes') ~ 'LAD',
+    Team %in% c('El Paso Chihuahuas', 'San Antonio Missions', 'Fort Wayne TinCaps', 'Lake Elsinore Storm') ~ 'SD',
+    Team %in% c('Sacramento River Cats', 'Richmond Flying Squirrels', 'Eugene Emeralds', 'San Jose Giants') ~ 'SF',
+    .default = 'MLB'
+  ),
+  League = case_when(
+    Team %in% c('Buffalo Bisons', 'Charlotte Knights', 'Columbus Clippers', 'Durham Bulls', 'Gwinnett Stripers', 'Indianapolis Indians', 'Iowa Cubs', 'Jacksonville Jumbo Shrimp', 'Lehigh Valley IronPigs', 'Louisville Bats', 'Memphis Redbirds', 'Nashville Sounds', 'Norfolk Tides', 'Omaha Storm Chasers', 'Rochester Red Wings', 'Scranton/Wilkes-Barre RailRiders', 'St. Paul Saints', 'Syracuse Mets', 'Toledo Mud Hens', 'Worcester Red Sox') ~ 'International League',
+    Team %in% c('Albuquerque Isotopes', 'El Paso Chihuahuas', 'Las Vegas Aviators', 'Oklahoma City Baseball Club', 'Reno Aces', 'Round Rock Express', 'Sacramento River Cats', 'Salt Lake Bees', 'Sugar Land Space Cowboys', 'Tacoma Rainiers') ~ 'Pacific Coast League',
+    Team %in% c('Akron RubberDucks', 'Altoona Curve', 'Binghamton Rumble Ponies', 'Bowie Baysox', 'Erie SeaWolves', 'Harrisburg Senators', 'Hartford Yard Goats', 'New Hampshire Fisher Cats', 'Portland Sea Dogs', 'Reading Fightin Phils', 'Richmond Flying Squirrels', 'Somerset Patriots') ~ 'Eastern League',
+    Team %in% c('Biloxi Shuckers', 'Birmingham Barons', 'Chattanooga Lookouts', 'Mississippi Braves', 'Montgomery Biscuits', 'Pensacola Blue Wahoos', 'Rocket City Trash Pandas', 'Tennessee Smokies') ~ 'Southern League',
+    Team %in% c('Amarillo Sod Poodles', 'Arkansas Travelers', 'Corpus Christi Hooks', 'Frisco RoughRiders', 'Midland RockHounds', 'Northwest Arkansas Naturals', 'San Antonio Missions', 'Springfield Cardinals', 'Tulsa Drillers', 'Wichita Wind Surge') ~ 'Texas League',
+    Team %in% c('Beloit Sky Carp', 'Cedar Rapids Kernels', 'Dayton Dragons', 'Fort Wayne TinCaps', 'Great Lakes Loons', 'Lake County Captains', 'Lansing Lugnuts', 'Peoria Chiefs', 'Quad Cities River Bandits', 'South Bend Cubs', 'West Michigan Whitecaps', 'Wisconsin Timber Rattlers') ~ 'Midwest League',
+    Team %in% c('Aberdeen IronBirds', 'Asheville Tourists', 'Bowling Green Hot Rods', 'Brooklyn Cyclones', 'Greensboro Grasshoppers', 'Greenville Drive', 'Hickory Crawdads', 'Hudson Valley Renegades', 'Jersey Shore BlueClaws', 'Rome Emperors', 'Wilmington Blue Rocks', 'Winston-Salem Dash') ~ 'South Atlantic League',
+    Team %in% c('Eugene Emeralds', 'Everett AquaSox', 'Hillsboro Hops', 'Spokane Indians', 'Tri-City Dust Devils', 'Vancouver Canadians') ~ 'Northwest League',
+    Team %in% c('Augusta GreenJackets', 'Carolina Mudcats', 'Charleston RiverDogs', 'Columbia Fireflies', 'Delmarva Shorebirds', 'Down East Wood Ducks', 'Fayetteville Woodpeckers', 'Fredericksburg Nationals', 'Kannapolis Cannon Ballers', 'Lynchburg Hillcats', 'Myrtle Beach Pelicans', 'Salem Red Sox') ~ 'Carolina League',
+    Team %in% c('Bradenton Marauders', 'Clearwater Threshers', 'Daytona Tortugas', 'Dunedin Blue Jays', 'Fort Myers Mighty Mussels', 'Jupiter Hammerheads', 'Lakeland Flying Tigers', 'Palm Beach Cardinals', 'St. Lucie Mets', 'Tampa Tarpons') ~ 'Florida State League',
+    Team %in% c('Fresno Grizzlies', 'Inland Empire 66ers', 'Lake Elsinore Storm', 'Modesto Nuts', 'Rancho Cucamonga Quakes', 'San Jose Giants', 'Stockton Ports', 'Visalia Rawhide') ~ 'California League',
+    Team %in% c('Oakland Athletics', 'Los Angeles Angels', 'Houston Astros', 'Texas Rangers', 'Seattle Mariners', 'Minnesota Twins', 'Chicago White Sox', 'Kansas City Royals', 'Cleveland Guardians', 'Detroit Tigers', 'Boston Red Sox', 'New York Yankees', 'Toronto Blue Jays', 'Baltimore Orioles', 'Tampa Bay Rays') ~ 'American League',
+    Team %in% c('New York Mets', 'Philadelphia Phillies', 'Atlanta Braves', 'Miami Marlins', 'Washington Nationals', 'Milwaukee Brewers', 'Chicago Cubs', 'St. Louis Cardinals', 'Pittsburgh Pirates', 'Cincinnati Reds', 'San Francisco Giants', 'Los Angeles Dodgers', 'San Diego Padres', 'Arizona Diamondbacks', 'Colorado Rockies') ~ 'National League',
+    .default = 'MLB'
+  )
+  )
+```
+
+
+
+```{r}
+write.csv(topHitterSeason, 'MiLB Team Hitting Rankings.csv')
+```
+
+
+```{r}
+beep(9)
+```
+
