@@ -93,21 +93,9 @@ write.csv(allData, '2024 AA May 3rd.csv')
 beep(3)
 ```
 
-Saved Data List:
-
-2024 Low A: 2:38 PM May 3rd
-2024 High A: 3:03 PM May 3rd
-
 
 Approximate run time from start to save state: 20 mins.
 
-# Data Load State
-
-If a CSV needs to be loaded to save time. DO NOT INCLUDE IN CODE POSTED TO GITHUB
-
-```{r}
-lowAData <- read.csv('2024 Low A May 3rd.csv')
-```
 
 
 
