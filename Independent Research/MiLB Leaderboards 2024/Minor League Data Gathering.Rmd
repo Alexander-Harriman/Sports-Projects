@@ -1,7 +1,7 @@
 ---
 title: "Minor League Data Gathering"
 author: "Alexander Harriman"
-date: "2024-05-03"
+date: "2024-06-04"
 output: html_document
 ---
 
@@ -31,7 +31,7 @@ library(dplyr)
 library(data.table)
 library(beepr)
 
-dateSequence <- seq(ymd('2024-04-05'), Sys.Date(), by = '1 day')
+dateSequence <- seq(ymd('2024-06-01'), Sys.Date(), by = '1 day')
 
 # AA, High-A, and Low-A start on April 5
 ## AAA start on March 29
@@ -42,7 +42,7 @@ gamePKs <- c()
 
 dataAcquisition <- function(){
   for(i in 1:length(dateSequence)){
-  allPK <- mlb_game_pks(date = dateSequence[i], level_ids = 12)$game_pk #Adjust level_id as needed, see above
+  allPK <- mlb_game_pks(date = dateSequence[i], level_ids = c(11, 12, 13, 14))$game_pk #Adjust level_id as needed, see above
   gamePKs <- append(gamePKs, allPK)
   }
   return(gamePKs)
@@ -86,17 +86,42 @@ dim(allData)[1]
 ```
 
 
-# Data Save State
+# Data Manipulation
+
+To make joining easier
 
 ```{r}
-write.csv(allData, '2024 AA May 3rd.csv')
-beep(3)
+cleanData <- allData |>
+  mutate(hitData.location = as.integer(hitData.location),
+         position.code = as.integer(position.code),
+         battingOrder = as.integer(battingOrder),
+         atBatIndex = as.integer(atBatIndex))
 ```
 
 
-Approximate run time from start to save state: 20 mins.
+# Data Save State
+
+```{r}
+#fwrite(cleanData, file = "2024 MLB May 22.csv")
+#beep(3)
+```
 
 
 
 
+# Data Combining
 
+If a CSV needs to be loaded to save loading time.
+
+```{r}
+#All current data
+pastData <- read.csv('2024 Full MiLB June 1.csv')
+
+
+fullData <- bind_rows(pastData, cleanData)
+
+#Save full file
+fwrite(fullData, file = '2024 Full MiLB June 4.csv')
+
+beep(9)
+```
