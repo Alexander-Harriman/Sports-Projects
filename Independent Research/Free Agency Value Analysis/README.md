@@ -6,4 +6,5 @@ Then, the contract each free agent received (web-scraped from ESPN) will be used
 The end result of this project will be R visuals and a Tableau dashboard summarizing findings.
 
 The ESPN data can be found here: [https://www.espn.com/mlb/freeagents/_/year/2021]
+
 The Baseball Reference data can be found here: [https://www.baseball-reference.com/leagues/majors/2021-free-agents.shtml]
