@@ -12,3 +12,5 @@ The result is a Tableau dashboard that contains metrics and rankings on the foll
 
 
 The metrics are calculated for the entire 2024 season and for the last 30 days to show trends.
+
+The dashboard can be found at the link here: [https://public.tableau.com/app/profile/alexander.harriman4059/viz/TrackingMomentuminMiLB/AggressiveBaserunning]
