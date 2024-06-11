@@ -11,4 +11,13 @@ This path contains all of the code used during my baseball projects throughout m
   - Generating a random forest model to determine Rule 5 selection odds and help identify players to be released from the organization
   - Other ad-hoc projects throughout the season
  
-The path also contains code for all projects used to generate public Tableau projects throughout 2024.
+The path also contains code for all projects used to generate public Tableau projects throughout 2024. These projects include:
+
+- Various Minor League Baseball KPI tracking analyses
+- An investigation into per-nation performance in the 2020 Tokyo Olympics and Paralympics
+- Tracking how well the Clemson Gymnastics team performed in their first season in 2024
+
+
+
+Some of these projects were turned into internal reports in R and Python. Others were turned into Tableau dashboards, which can be found here: 
+[https://public.tableau.com/app/profile/alexander.harriman4059/vizzes]
