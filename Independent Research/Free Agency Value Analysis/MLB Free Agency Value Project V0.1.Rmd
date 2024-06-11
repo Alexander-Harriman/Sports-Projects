@@ -1,0 +1,90 @@
+---
+title: "MLB Free Agency Success V0.1"
+author: "Alexander Harriman"
+date: "2024-06-11"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+This project will investigate which teams are the best at signing players in free agency.
+
+Free agency information will be gathered from the 2011-12 offseason to 2021-22 offseason. The amount of money paid will be compared to the value the player provided based on Baseball Reference WAR.
+
+The exact value of a WAR for each season will be determined by the average amount a team was willing to pay for WAR entering each offseason. For each player entering free agency, the average WAR over the previous three years (according to Baseball Reference) will be used for this purpose.
+
+
+WAR value will be bucketed by player age (<25, 25-30, 30-35, 35+) and by position (SP, RP, C, CF, 1B and DH, Middle Infield, Corner Outfield) to account for the age and positional value that goes into free agency decisions.
+
+
+All contract values are assigned to the team that made the deal, even if the player played for other teams after a trade or release. For this project, the goal is to see which teams made the worst decisions, not how much those decisions hurt the team directly.
+
+Contracts that have not been finished will be pro-rated based on the number of years lapsed. Simiarly, the 2020 60-game season contract proration will also be considered for players who were signed through the 2020 season.
+
+
+```{r}
+library(rvest)
+library(xml2)
+library(janitor)
+```
+
+
+
+# Acquire Free Agent Contract Information
+
+This data comes from the ESPN Free Agency Tracker. The 2011 edition can be found here: [https://www.espn.com/mlb/freeagents/_/year/2011]
+
+```{r}
+espnData <- list()
+
+for(i in 2011:2021){
+  link <- paste0('https://www.espn.com/mlb/freeagents/_/year/',
+                 i)
+  
+  dataTable <- link |>
+    read_html() |>
+    html_nodes('table') |>
+    html_table() 
+  
+  dataTable <- dataTable[[1]][-1,]
+  
+  rowNameFix <- function(dataTable) {
+    names(dataTable) <- as.character(unlist(dataTable[1,]))
+    dataTable[-1,]
+  }
+  
+  cleanTable <- rowNameFix(dataTable) |>
+    filter(is.na(DOLLARS) == FALSE) |>
+    filter(DOLLARS != '') |>
+    filter(DOLLARS != 'DOLLARS')
+  
+  espnData[i-2010] <- cleanTable 
+}
+
+```
+
+
+# Acquire Performance Up to FA Information
+
+
+This will be acquired from Baseball Reference's Free Agency Tracker. The 2011 edition can be found here: [https://www.baseball-reference.com/leagues/majors/2011-free-agents.shtml]
+
+
+
+```{r}
+preFACareer <- list()
+
+for(i in 2011:2021){
+  link <- paste0('https://www.baseball-reference.com/leagues/majors/',
+                 i,
+                 '-free-agents.shtml')
+  preFACareer[i-2010] <- link |>
+    read_html() |>
+    html_nodes('table') |>
+    html_table()
+}
+```
+
