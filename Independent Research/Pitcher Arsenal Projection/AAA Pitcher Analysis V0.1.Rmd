@@ -1,0 +1,93 @@
+---
+title: "AAA Pitcher Analysis V0.1"
+author: "Alexander Harriman"
+date: "2024-06-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+In this analysis, each AAA pitcher's arsenal will be projected up to the MLB level by looking at how players who pitched in both levels saw their arsenal shift upon promotion in 2023. Then, after calculating each 2024 AAA pitcher's metrics, the adjustment will be made to show how well they would be if they were in the MLB right now.
+
+The report will also contain general performance visuals (similar to the first Rangers dashboard), containing:
+
+* A results table for each pitch (SWM, Zone%, wOBA against, GB% and ranks for the AAA level)
+* A heat map showing where the pitch ends up (filtered by pitch type in Tableau)
+* A table with each pitch's current Velo (30 ntile - 70ntile), IVB, HB, and Spin
+* A table with the adjusted values for the MLB level and how they would rank amongst all MLB pitchers at their pro club
+* A chart with the average IVB and HB for each pitch type (IVB x axis, HB y axis)
+
+
+
+# Load Data and Packages
+
+```{r}
+library(tidyverse)
+library(gt)
+```
+
+
+```{r}
+aaa2023 <- read.csv('2023 AAA Season.csv')
+mlb2023 <- read.csv('2023 MLB Season.csv')
+
+aaa2024 <- read.csv('2024 Full MiLB June 13.csv') |>
+  filter(home_level_name == 'Triple-A')
+```
+
+
+# Find Pitchers at Both 2023 AAA and 2023 MLB
+
+Minimum 50 pitches of each pitch type at both levels to qualify
+
+
+```{r}
+aaaAverages <- aaa2023 |>
+  distinct(paste(game_pk, startTime, endTime), .keep_all = TRUE) |>
+  group_by(matchup.pitcher.id, matchup.pitcher.fullName, details.type.description) |>
+  summarise(pitches = n(),
+            avgVelo = mean(pitchData.startSpeed, na.rm = TRUE),
+            IVB = mean(pitchData.breaks.breakVerticalInduced, na.rm = TRUE),
+            HB = mean(pitchData.breaks.breakHorizontal),
+            Spin = mean(pitchData.breaks.spinRate)) |>
+  filter(pitches >= 50) |>
+  mutate(League = case_when(
+    fielding_team %in% c('Buffalo Bisons', 'Charlotte Knights', 'Columbus Clippers', 'Durham Bulls', 'Gwinnett Stripers', 'Indianapolis Indians', 'Iowa Cubs', 'Jacksonville Jumbo Shrimp', 'Lehigh Valley IronPigs', 'Louisville Bats', 'Memphis Redbirds', 'Nashville Sounds', 'Norfolk Tides', 'Omaha Storm Chasers', 'Rochester Red Wings', 'Scranton/Wilkes-Barre RailRiders', 'St. Paul Saints', 'Syracuse Mets', 'Toledo Mud Hens', 'Worcester Red Sox') ~ 'International League',
+    fielding_team %in% c('Albuquerque Isotopes', 'El Paso Chihuahuas', 'Las Vegas Aviators', 'Oklahoma City Baseball Club', 'Reno Aces', 'Round Rock Express', 'Sacramento River Cats', 'Salt Lake Bees', 'Sugar Land Space Cowboys', 'Tacoma Rainiers') ~ 'Pacific Coast League'),
+    id = paste(matchup.pitcher.fullName, details.type.description))
+
+mlbAverages <- mlb2023 |>
+  distinct(paste(game_pk, startTime, endTime), .keep_all = TRUE) |>
+  group_by(matchup.pitcher.id, matchup.pitcher.fullName, details.type.description) |>
+  summarise(pitches = n(),
+            avgVelo = mean(pitchData.startSpeed),
+            IVB = mean(pitchData.breaks.breakVerticalInduced),
+            HB = mean(pitchData.breaks.breakHorizontal),
+            Spin = mean(pitchData.breaks.spinRate)) |>
+  filter(pitches >= 50) |>
+  mutate(League = 'MLB',
+    id = paste(matchup.pitcher.fullName, details.type.description))
+```
+
+# Find Players in Both Leagues
+
+```{r}
+allAverages <- rbind_rows(aaaAverages, mlbAverages)
+
+eligiblePitches <- allAverages |>
+  group_by(id) |>
+  summarise(rows = n()) |>
+  filter(rows == 2)
+
+
+cleanAAA <- aaaAverages |>
+  filter(id %in% eligiblePitches$id)
+
+cleanMLB <- mlbAverges |>
+  filter(id %in% eligiblePitches$id)
+```
+
+
