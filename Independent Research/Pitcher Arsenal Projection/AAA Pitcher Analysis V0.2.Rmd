@@ -1,0 +1,272 @@
+---
+title: "AAA Pitcher Analysis V0.1"
+author: "Alexander Harriman"
+date: "2024-06-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+In this analysis, each AAA pitcher's arsenal will be projected up to the MLB level by looking at how players who pitched in both levels saw their arsenal shift upon promotion in 2023. Then, after calculating each 2024 AAA pitcher's metrics, the adjustment will be made to show how well they would be if they were in the MLB right now.
+
+The report will also contain general performance visuals (similar to the first Rangers dashboard), containing:
+
+* A results table for each pitch (SWM, Zone%, wOBA against, GB% and ranks for the AAA level)
+* A heat map showing where the pitch ends up (filtered by pitch type in Tableau)
+* A table with each pitch's current Velo (30 ntile - 70ntile), IVB, HB, and Spin
+* A table with the adjusted values for the MLB level and how they would rank amongst all MLB pitchers at their pro club
+* A chart with the average IVB and HB for each pitch type (IVB x axis, HB y axis)
+
+
+
+# Load Data and Packages
+
+```{r}
+library(tidyverse)
+library(gt)
+```
+
+
+```{r}
+aaa2023 <- read.csv('2023 AAA Season.csv')
+mlb2023 <- read.csv('2023 MLB Season.csv')
+
+aaa2024 <- read.csv('2024 Full MiLB June 23.csv') |>
+  filter(home_level_name == 'Triple-A')
+mlb2024 <- read.csv('2024 Full MLB June 6.csv')
+```
+
+# Add VAA to All Data
+
+
+```{r}
+vaa2024 <- aaa2024 |>
+  mutate(vyf = -sqrt((pitchData.coordinates.vY0^2) - (2 * pitchData.coordinates.aY *(50 - (17/12))))) |>
+  mutate(t = (vyf - pitchData.coordinates.vY0) / pitchData.coordinates.aY) |>
+  mutate(vzf = pitchData.coordinates.vZ0 + (pitchData.coordinates.aZ * t)) |>
+  mutate(VAA = -atan(vzf/vyf) * (180/pi))
+
+vaa2023 <- aaa2023 |>
+  mutate(vyf = -sqrt((pitchData.coordinates.vY0^2) - (2 * pitchData.coordinates.aY *(50 - (17/12))))) |>
+  mutate(t = (vyf - pitchData.coordinates.vY0) / pitchData.coordinates.aY) |>
+  mutate(vzf = pitchData.coordinates.vZ0 + (pitchData.coordinates.aZ * t)) |>
+  mutate(VAA = -atan(vzf/vyf) * (180/pi))
+
+vaamlb2023 <- mlb2023 |>
+  mutate(vyf = -sqrt((pitchData.coordinates.vY0^2) - (2 * pitchData.coordinates.aY *(50 - (17/12))))) |>
+  mutate(t = (vyf - pitchData.coordinates.vY0) / pitchData.coordinates.aY) |>
+  mutate(vzf = pitchData.coordinates.vZ0 + (pitchData.coordinates.aZ * t)) |>
+  mutate(VAA = -atan(vzf/vyf) * (180/pi))
+```
+
+
+# Find Pitchers at Both 2023 AAA and 2023 MLB
+
+Minimum 50 pitches of each pitch type at both levels to qualify
+
+
+```{r}
+aaaAverages <- vaa2023 |>
+  distinct(paste(game_pk, startTime, endTime), .keep_all = TRUE) |>
+  group_by(matchup.pitcher.id, matchup.pitcher.fullName, details.type.description, fielding_team) |>
+  summarise(pitches = n(),
+            avgVelo = mean(pitchData.startSpeed, na.rm = TRUE),
+            IVB = mean(pitchData.breaks.breakVerticalInduced, na.rm = TRUE),
+            HB = mean(pitchData.breaks.breakHorizontal, na.rm = TRUE),
+            Spin = mean(pitchData.breaks.spinRate, na.rm = TRUE),
+            VAA = mean(VAA)) |>
+  filter(pitches >= 50) |>
+  mutate(League = case_when(
+    fielding_team %in% c('Buffalo Bisons', 'Charlotte Knights', 'Columbus Clippers', 'Durham Bulls', 'Gwinnett Stripers', 'Indianapolis Indians', 'Iowa Cubs', 'Jacksonville Jumbo Shrimp', 'Lehigh Valley IronPigs', 'Louisville Bats', 'Memphis Redbirds', 'Nashville Sounds', 'Norfolk Tides', 'Omaha Storm Chasers', 'Rochester Red Wings', 'Scranton/Wilkes-Barre RailRiders', 'St. Paul Saints', 'Syracuse Mets', 'Toledo Mud Hens', 'Worcester Red Sox') ~ 'International League',
+    fielding_team %in% c('Albuquerque Isotopes', 'El Paso Chihuahuas', 'Las Vegas Aviators', 'Oklahoma City Baseball Club', 'Reno Aces', 'Round Rock Express', 'Sacramento River Cats', 'Salt Lake Bees', 'Sugar Land Space Cowboys', 'Tacoma Rainiers') ~ 'Pacific Coast League'),
+    id = paste(matchup.pitcher.fullName, details.type.description))
+
+mlbAverages <- vaamlb2023 |>
+  distinct(paste(game_pk, startTime, endTime), .keep_all = TRUE) |>
+  group_by(matchup.pitcher.id, matchup.pitcher.fullName, details.type.description, fielding_team) |>
+  summarise(pitches = n(),
+            avgVelo = mean(pitchData.startSpeed, na.rm = TRUE),
+            IVB = mean(pitchData.breaks.breakVerticalInduced, na.rm = TRUE),
+            HB = mean(pitchData.breaks.breakHorizontal, na.rm = TRUE),
+            Spin = mean(pitchData.breaks.spinRate, na.rm = TRUE),
+            VAA = mean(VAA)) |>
+  filter(pitches >= 50) |>
+  mutate(League = 'MLB',
+    id = paste(matchup.pitcher.fullName, details.type.description))
+```
+
+# Find Players in Both Leagues
+
+```{r}
+allAverages <- bind_rows(aaaAverages, mlbAverages)
+
+eligiblePitches <- allAverages |>
+  group_by(id) |>
+  summarise(rows = n()) |>
+  filter(rows == 2)
+
+
+cleanAAA <- aaaAverages |>
+  filter(id %in% eligiblePitches$id)
+
+cleanMLB <- mlbAverages |>
+  filter(id %in% eligiblePitches$id)
+```
+
+
+
+```{r}
+cleanAll <- inner_join(cleanAAA, cleanMLB, by = c('matchup.pitcher.id', 'id')) 
+
+cleanAll <- cleanAll |>
+  filter(details.type.description.x != '' & is.na(League.x) == FALSE)
+
+cleanAll
+```
+
+
+```{r}
+differences <- cleanAll |>
+  mutate(veloDiff = avgVelo.x - avgVelo.y,
+         ivbDiff = IVB.x - IVB.y,
+         hbDiff = HB.x - HB.y,
+         spinDiff = Spin.x - Spin.y,
+         vaaDiff = VAA.x - VAA.y) |>
+  mutate(veloWeight = pitches.x * veloDiff,
+         ivbWeight = pitches.x * ivbDiff,
+         hbWeight = pitches.x * hbDiff,
+         spinWeight = pitches.x * spinDiff,
+         vaaWeight = pitches.x * vaaDiff)
+
+averageDiff <- differences |>
+  group_by(details.type.description.x, League.x) |>
+  summarise(Pitchers = n(),
+            IVB = round(sum(ivbWeight) / sum(pitches.x), 1),
+            HB = round(sum(hbWeight) / sum(pitches.x), 1),
+            Spin = round(sum(spinWeight) / sum(pitches.x), 0),
+            VAA = round(sum(vaaWeight) / sum(pitches.x), 2)) |>
+  filter(Pitchers > 5)
+
+averageDiff
+```
+
+
+# Create GT Table of Results
+
+
+
+```{r}
+averageDiff2 <- averageDiff |>
+  filter(League.x == 'Pacific Coast League') |>
+  select(details.type.description.x, Pitchers, IVB, HB, Spin, VAA) |>
+  arrange(desc(Pitchers)) |>
+  ungroup()
+
+colnames(averageDiff2) <- c('Pitch Type', 'Pitchers', 'IVB', 'HB', 'Spin', 'VAA')
+
+adjustmentTable <- averageDiff2 |>
+  gt() |>
+  tab_header(title = md('**Pitch Movement Variations from AAA to MLB**')) |>
+  cols_align(align = 'center', columns = c('Pitch Type', 'Pitchers', 'IVB', 'HB', 'Spin', 'VAA')) |>
+  opt_stylize(style = 5, color = 'blue') |>
+  cols_width(`Pitch Type` ~ px(175), everything() ~ px(75)) |>
+  tab_footnote(footnote = 'Eligible Pitchers Threw 50 Pitches of Each Type in AAA and MLB in 2023.') 
+
+adjustmentTable
+```
+
+
+
+
+# Use Adjustments to Get 2024 AAA to MLB Arsenals
+
+## Find 2024 Arsenal Averages
+
+
+```{r}
+players2024 <- vaa2024 |>
+  distinct(paste(game_pk, startTime, endTime), .keep_all = TRUE) |>
+  group_by(matchup.pitcher.id, matchup.pitcher.fullName, details.type.description, fielding_team) |>
+  summarise(pitches = n(),
+            velo30 = quantile(pitchData.startSpeed, probs = 0.30, na.rm = TRUE),
+            velo70 = quantile(pitchData.startSpeed, probs = 0.70, na.rm = TRUE),
+            IVB = mean(pitchData.breaks.breakVerticalInduced, na.rm = TRUE),
+            HB = mean(pitchData.breaks.breakHorizontal, na.rm = TRUE),
+            Spin = mean(pitchData.breaks.spinRate, na.rm = TRUE),
+            VAA = mean(VAA)) |>
+  filter(pitches >= 50 & details.type.description != '') |>
+  mutate(League = case_when(
+    fielding_team %in% c('Buffalo Bisons', 'Charlotte Knights', 'Columbus Clippers', 'Durham Bulls', 'Gwinnett Stripers', 'Indianapolis Indians', 'Iowa Cubs', 'Jacksonville Jumbo Shrimp', 'Lehigh Valley IronPigs', 'Louisville Bats', 'Memphis Redbirds', 'Nashville Sounds', 'Norfolk Tides', 'Omaha Storm Chasers', 'Rochester Red Wings', 'Scranton/Wilkes-Barre RailRiders', 'St. Paul Saints', 'Syracuse Mets', 'Toledo Mud Hens', 'Worcester Red Sox') ~ 'International League',
+    fielding_team %in% c('Albuquerque Isotopes', 'El Paso Chihuahuas', 'Las Vegas Aviators', 'Oklahoma City Baseball Club', 'Reno Aces', 'Round Rock Express', 'Sacramento River Cats', 'Salt Lake Bees', 'Sugar Land Space Cowboys', 'Tacoma Rainiers') ~ 'Pacific Coast League'),
+    id = paste(matchup.pitcher.fullName, details.type.description))
+
+players2024
+```
+
+
+## Remove Pitchers Who Played in 2024 MLB
+
+These players are outside the scope of this project, as their actual MLB arsenals can be calculated without any projection.
+
+
+
+```{r}
+mlbPlayers2024 <- mlb2024 |>
+  distinct(paste(game_pk, startTime, endTime), .keep_all = TRUE) |>
+  group_by(matchup.pitcher.id, matchup.pitcher.fullName, details.type.description, fielding_team) |>
+  summarise(pitches = n(),
+            velo30 = quantile(pitchData.startSpeed, probs = 0.30, na.rm = TRUE),
+            velo70 = quantile(pitchData.startSpeed, probs = 0.70, na.rm = TRUE),
+            IVB = mean(pitchData.breaks.breakVerticalInduced, na.rm = TRUE),
+            HB = mean(pitchData.breaks.breakHorizontal, na.rm = TRUE),
+            Spin = mean(pitchData.breaks.spinRate, na.rm = TRUE)) |>
+  mutate(League = case_when(
+    fielding_team %in% c('Buffalo Bisons', 'Charlotte Knights', 'Columbus Clippers', 'Durham Bulls', 'Gwinnett Stripers', 'Indianapolis Indians', 'Iowa Cubs', 'Jacksonville Jumbo Shrimp', 'Lehigh Valley IronPigs', 'Louisville Bats', 'Memphis Redbirds', 'Nashville Sounds', 'Norfolk Tides', 'Omaha Storm Chasers', 'Rochester Red Wings', 'Scranton/Wilkes-Barre RailRiders', 'St. Paul Saints', 'Syracuse Mets', 'Toledo Mud Hens', 'Worcester Red Sox') ~ 'International League',
+    fielding_team %in% c('Albuquerque Isotopes', 'El Paso Chihuahuas', 'Las Vegas Aviators', 'Oklahoma City Baseball Club', 'Reno Aces', 'Round Rock Express', 'Sacramento River Cats', 'Salt Lake Bees', 'Sugar Land Space Cowboys', 'Tacoma Rainiers') ~ 'Pacific Coast League'),
+    id = paste(matchup.pitcher.fullName, details.type.description))
+```
+
+
+
+```{r}
+allAverages2 <- bind_rows(players2024, mlbPlayers2024)
+
+eligiblePitches2 <- allAverages2 |>
+  group_by(id) |>
+  summarise(rows = n()) |>
+  filter(rows != 2)
+
+
+cleanAAA2024 <- players2024 |>
+  filter(id %in% eligiblePitches2$id)
+```
+
+
+
+# Find Percentiles for Pitch Metrics
+
+
+```{r}
+rankedAAA2024 <- cleanAAA2024 |>
+  group_by(details.type.description) |>
+  mutate(ivbPerc = 100.0*(rank(-IVB) / length(IVB)),
+         hbPerc = 100.0*(rank(-HB) / length(HB)),
+         spinPerc = 100.0*(rank(-Spin) / length(Spin)),
+         vaaPerc = 100.0*(rank(VAA) / length(VAA)))
+
+rankedAAA2024
+```
+
+
+# Export the True Averages
+
+```{r}
+write.csv(cleanAAA2024, '2024 Pitcher Arsenals.csv')
+```
+
+
+
+# Adjust to MLB Averages
