@@ -1,0 +1,657 @@
+---
+title: "AAA Pitcher Analysis V0.1"
+author: "Alexander Harriman"
+date: "2024-06-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+In this analysis, each AAA pitcher's arsenal will be projected up to the MLB level by looking at how players who pitched in both levels saw their arsenal shift upon promotion in 2023. Then, after calculating each 2024 AAA pitcher's metrics, the adjustment will be made to show how well they would be if they were in the MLB right now.
+
+The report will also contain general performance visuals (similar to the first Rangers dashboard), containing:
+
+* A results table for each pitch (SWM, Zone%, wOBA against, GB% and ranks for the AAA level)
+* A heat map showing where the pitch ends up (filtered by pitch type in Tableau)
+* A table with each pitch's current Velo (30 ntile - 70ntile), IVB, HB, and Spin
+* A table with the adjusted movement metrics at the MLB level
+* A results table for each MLB adjusted pitch based on 2023 MLB pitches similar to the adjustment (same metrics)
+* A plot with the average movement for each MLB adjusted pitch, to replace the heat map
+* The two closest MLB comps for each AAA pitcher/pitch combo, with links to their Baseball Savant pages
+
+
+
+# Load Data and Packages
+
+```{r}
+library(tidyverse)
+library(gt)
+library(randomForest)
+library(rvest)
+library(xml2)
+library(tidyr)
+```
+
+
+```{r}
+aaa2023 <- read.csv('2023 AAA Season.csv')
+mlb2023 <- read.csv('2023 MLB Season.csv')
+
+aaa2024 <- read.csv('2024 Full MiLB July 7.csv') |>
+  filter(home_level_name == 'Triple-A')
+mlb2024 <- read.csv('2024 Full MLB July 10.csv')
+```
+
+# Add VAA to All Data
+
+
+```{r}
+vaa2024 <- aaa2024 |>
+  mutate(vyf = -sqrt((pitchData.coordinates.vY0^2) - (2 * pitchData.coordinates.aY *(50 - (17/12))))) |>
+  mutate(t = (vyf - pitchData.coordinates.vY0) / pitchData.coordinates.aY) |>
+  mutate(vzf = pitchData.coordinates.vZ0 + (pitchData.coordinates.aZ * t)) |>
+  mutate(VAA = -atan(vzf/vyf) * (180/pi))
+
+vaa2023 <- aaa2023 |>
+  mutate(vyf = -sqrt((pitchData.coordinates.vY0^2) - (2 * pitchData.coordinates.aY *(50 - (17/12))))) |>
+  mutate(t = (vyf - pitchData.coordinates.vY0) / pitchData.coordinates.aY) |>
+  mutate(vzf = pitchData.coordinates.vZ0 + (pitchData.coordinates.aZ * t)) |>
+  mutate(VAA = -atan(vzf/vyf) * (180/pi))
+
+vaamlb2023 <- mlb2023 |>
+  mutate(vyf = -sqrt((pitchData.coordinates.vY0^2) - (2 * pitchData.coordinates.aY *(50 - (17/12))))) |>
+  mutate(t = (vyf - pitchData.coordinates.vY0) / pitchData.coordinates.aY) |>
+  mutate(vzf = pitchData.coordinates.vZ0 + (pitchData.coordinates.aZ * t)) |>
+  mutate(VAA = -atan(vzf/vyf) * (180/pi))
+
+vaamlb2024 <- mlb2024 |>
+  mutate(vyf = -sqrt((pitchData.coordinates.vY0^2) - (2 * pitchData.coordinates.aY *(50 - (17/12))))) |>
+  mutate(t = (vyf - pitchData.coordinates.vY0) / pitchData.coordinates.aY) |>
+  mutate(vzf = pitchData.coordinates.vZ0 + (pitchData.coordinates.aZ * t)) |>
+  mutate(VAA = -atan(vzf/vyf) * (180/pi))
+```
+
+
+# Find Pitchers at Both 2023 AAA and 2023 MLB
+
+Minimum 50 pitches of each pitch type at both levels to qualify
+
+
+```{r}
+aaaAverages <- vaa2023 |>
+  distinct(paste(game_pk, startTime, endTime), .keep_all = TRUE) |>
+  group_by(matchup.pitcher.id, matchup.pitcher.fullName, details.type.description, fielding_team) |>
+  summarise(pitches = n(),
+            avgVelo = mean(pitchData.startSpeed, na.rm = TRUE),
+            IVB = mean(pitchData.breaks.breakVerticalInduced, na.rm = TRUE),
+            HB = mean(pitchData.breaks.breakHorizontal, na.rm = TRUE),
+            Spin = mean(pitchData.breaks.spinRate, na.rm = TRUE),
+            VAA = mean(VAA)) |>
+  filter(pitches >= 50) |>
+  mutate(League = case_when(
+    fielding_team %in% c('Buffalo Bisons', 'Charlotte Knights', 'Columbus Clippers', 'Durham Bulls', 'Gwinnett Stripers', 'Indianapolis Indians', 'Iowa Cubs', 'Jacksonville Jumbo Shrimp', 'Lehigh Valley IronPigs', 'Louisville Bats', 'Memphis Redbirds', 'Nashville Sounds', 'Norfolk Tides', 'Omaha Storm Chasers', 'Rochester Red Wings', 'Scranton/Wilkes-Barre RailRiders', 'St. Paul Saints', 'Syracuse Mets', 'Toledo Mud Hens', 'Worcester Red Sox') ~ 'International League',
+    fielding_team %in% c('Albuquerque Isotopes', 'El Paso Chihuahuas', 'Las Vegas Aviators', 'Oklahoma City Baseball Club', 'Reno Aces', 'Round Rock Express', 'Sacramento River Cats', 'Salt Lake Bees', 'Sugar Land Space Cowboys', 'Tacoma Rainiers') ~ 'Pacific Coast League'),
+    id = paste(matchup.pitcher.fullName, details.type.description))
+
+mlbAverages <- vaamlb2023 |>
+  distinct(paste(game_pk, startTime, endTime), .keep_all = TRUE) |>
+  group_by(matchup.pitcher.id, matchup.pitcher.fullName, details.type.description, fielding_team) |>
+  summarise(pitches = n(),
+            avgVelo = mean(pitchData.startSpeed, na.rm = TRUE),
+            IVB = mean(pitchData.breaks.breakVerticalInduced, na.rm = TRUE),
+            HB = mean(pitchData.breaks.breakHorizontal, na.rm = TRUE),
+            Spin = mean(pitchData.breaks.spinRate, na.rm = TRUE),
+            VAA = mean(VAA)) |>
+  filter(pitches >= 50) |>
+  mutate(League = 'MLB',
+    id = paste(matchup.pitcher.fullName, details.type.description))
+```
+
+# Find Players in Both Leagues
+
+```{r}
+allAverages <- bind_rows(aaaAverages, mlbAverages)
+
+eligiblePitches <- allAverages |>
+  group_by(id) |>
+  summarise(rows = n()) |>
+  filter(rows == 2)
+
+
+cleanAAA <- aaaAverages |>
+  filter(id %in% eligiblePitches$id)
+
+cleanMLB <- mlbAverages |>
+  filter(id %in% eligiblePitches$id)
+```
+
+
+
+```{r}
+cleanAll <- inner_join(cleanAAA, cleanMLB, by = c('matchup.pitcher.id', 'id')) 
+
+cleanAll <- cleanAll |>
+  filter(details.type.description.x != '' & is.na(League.x) == FALSE) |>
+  filter(abs(avgVelo.x - avgVelo.y) < 1)
+
+cleanAll
+```
+
+
+```{r}
+differences <- cleanAll |>
+  mutate(veloDiff = avgVelo.x - avgVelo.y,
+         ivbDiff = IVB.x - IVB.y,
+         hbDiff = HB.x - HB.y,
+         spinDiff = Spin.x - Spin.y,
+         vaaDiff = VAA.x - VAA.y) |>
+  mutate(veloWeight = pitches.x * veloDiff,
+         ivbWeight = pitches.x * ivbDiff,
+         hbWeight = pitches.x * hbDiff,
+         spinWeight = pitches.x * spinDiff,
+         vaaWeight = pitches.x * vaaDiff)
+
+averageDiff <- differences |>
+  group_by(details.type.description.x, League.x) |>
+  summarise(Pitchers = n(),
+            Velo = round(sum(veloWeight) / sum(pitches.x), 2),
+            IVB = round(sum(ivbWeight) / sum(pitches.x), 2),
+            HB = round(sum(hbWeight) / sum(pitches.x), 2),
+            Spin = round(sum(spinWeight) / sum(pitches.x), 0),
+            VAA = round(sum(vaaWeight) / sum(pitches.x), 2)) |>
+  filter(Pitchers > 5 | details.type.description.x == 'Splitter')
+
+averageDiff
+```
+
+
+# Create GT Table of Results
+
+
+
+```{r}
+averageDiff2 <- averageDiff |>
+  filter(League.x == 'Pacific Coast League') |>
+  select(details.type.description.x, Pitchers, IVB, HB, Spin, VAA) |>
+  arrange(desc(Pitchers)) |>
+  ungroup()
+
+colnames(averageDiff2) <- c('Pitch Type', 'Pitchers', 'IVB', 'HB', 'Spin', 'VAA')
+
+adjustmentTable <- averageDiff2 |>
+  gt() |>
+  tab_header(title = md('**Pitch Movement Variations from AAA to MLB**')) |>
+  cols_align(align = 'center', columns = c('Pitch Type', 'Pitchers', 'IVB', 'HB', 'Spin', 'VAA')) |>
+  opt_stylize(style = 5, color = 'blue') |>
+  cols_width(`Pitch Type` ~ px(175), everything() ~ px(75)) 
+
+adjustmentTable
+```
+
+
+
+
+# Use Adjustments to Get 2024 AAA to MLB Arsenals
+
+## Find 2024 Arsenal Averages
+
+
+```{r}
+players2024 <- vaa2024 |>
+  distinct(paste(game_pk, startTime, endTime), .keep_all = TRUE) |>
+  mutate(details.type.description = case_when(
+    details.type.description == 'Forkball' ~ 'Cutter',
+    details.type.description == 'Knuckle Curve' ~ 'Curveball',
+    details.type.description == 'Screwball' ~ '',
+    details.type.description == 'Knuckle Ball' ~ '',
+    details.type.description == 'Slurve' ~ 'Curveball',
+    details.type.description == 'Slow Curve' ~ 'Curveball',
+    details.type.description == 'Eephus' ~ '',
+    details.type.description == 'Fastball' ~ 'Four-Seam Fastball',
+    .default = details.type.description
+  )) |>
+  group_by(matchup.pitcher.id, matchup.pitcher.fullName, details.type.description, fielding_team) |>
+  summarise(pitches = n(),
+            velo30 = quantile(pitchData.startSpeed, probs = 0.30, na.rm = TRUE),
+            velo50 = mean(pitchData.startSpeed, na.rm = TRUE),
+            velo70 = quantile(pitchData.startSpeed, probs = 0.70, na.rm = TRUE),
+            IVB = mean(pitchData.breaks.breakVerticalInduced, na.rm = TRUE),
+            HB = mean(pitchData.breaks.breakHorizontal, na.rm = TRUE),
+            Spin = mean(pitchData.breaks.spinRate, na.rm = TRUE),
+            VAA = mean(VAA)) |>
+  filter(pitches >= 50 & details.type.description != '') |>
+  mutate(League = case_when(
+    fielding_team %in% c('Buffalo Bisons', 'Charlotte Knights', 'Columbus Clippers', 'Durham Bulls', 'Gwinnett Stripers', 'Indianapolis Indians', 'Iowa Cubs', 'Jacksonville Jumbo Shrimp', 'Lehigh Valley IronPigs', 'Louisville Bats', 'Memphis Redbirds', 'Nashville Sounds', 'Norfolk Tides', 'Omaha Storm Chasers', 'Rochester Red Wings', 'Scranton/Wilkes-Barre RailRiders', 'St. Paul Saints', 'Syracuse Mets', 'Toledo Mud Hens', 'Worcester Red Sox') ~ 'International League',
+    fielding_team %in% c('Albuquerque Isotopes', 'El Paso Chihuahuas', 'Las Vegas Aviators', 'Oklahoma City Baseball Club', 'Reno Aces', 'Round Rock Express', 'Sacramento River Cats', 'Salt Lake Bees', 'Sugar Land Space Cowboys', 'Tacoma Rainiers') ~ 'Pacific Coast League'),
+    id = paste(matchup.pitcher.fullName, details.type.description))
+
+players2024
+```
+
+
+## Remove Pitchers Who Played in 2024 MLB
+
+These players are outside the scope of this project, as their actual MLB arsenals can be calculated without any projection.
+
+
+
+```{r}
+mlbPlayers2024 <- vaamlb2024 |>
+  distinct(paste(game_pk, startTime, endTime), .keep_all = TRUE) |>
+  mutate(details.type.description = case_when(
+    details.type.description == 'Forkball' ~ 'Cutter',
+    details.type.description == 'Knuckle Curve' ~ 'Curveball',
+    details.type.description == 'Screwball' ~ '',
+    details.type.description == 'Knuckle Ball' ~ '',
+    details.type.description == 'Slurve' ~ 'Curveball',
+    details.type.description == 'Slow Curve' ~ 'Curveball',
+    details.type.description == 'Eephus' ~ '',
+    details.type.description == 'Fastball' ~ 'Four-Seam Fastball',
+    .default = details.type.description
+  )) |>
+  group_by(matchup.pitcher.id, matchup.pitcher.fullName, details.type.description, fielding_team) |>
+  summarise(pitches = n(),
+            velo30 = quantile(pitchData.startSpeed, probs = 0.30, na.rm = TRUE),
+            velo50 = mean(pitchData.startSpeed, na.rm = TRUE),
+            velo70 = quantile(pitchData.startSpeed, probs = 0.70, na.rm = TRUE),
+            IVB = mean(pitchData.breaks.breakVerticalInduced, na.rm = TRUE),
+            HB = mean(pitchData.breaks.breakHorizontal, na.rm = TRUE),
+            Spin = mean(pitchData.breaks.spinRate, na.rm = TRUE),
+            VAA = mean(VAA)) |>
+  filter(pitches > 50 & details.type.description != '') |>
+  mutate(League = case_when(
+    fielding_team %in% c('Buffalo Bisons', 'Charlotte Knights', 'Columbus Clippers', 'Durham Bulls', 'Gwinnett Stripers', 'Indianapolis Indians', 'Iowa Cubs', 'Jacksonville Jumbo Shrimp', 'Lehigh Valley IronPigs', 'Louisville Bats', 'Memphis Redbirds', 'Nashville Sounds', 'Norfolk Tides', 'Omaha Storm Chasers', 'Rochester Red Wings', 'Scranton/Wilkes-Barre RailRiders', 'St. Paul Saints', 'Syracuse Mets', 'Toledo Mud Hens', 'Worcester Red Sox') ~ 'International League',
+    fielding_team %in% c('Albuquerque Isotopes', 'El Paso Chihuahuas', 'Las Vegas Aviators', 'Oklahoma City Baseball Club', 'Reno Aces', 'Round Rock Express', 'Sacramento River Cats', 'Salt Lake Bees', 'Sugar Land Space Cowboys', 'Tacoma Rainiers') ~ 'Pacific Coast League'),
+    id = paste(matchup.pitcher.fullName, details.type.description))
+```
+
+
+```{r}
+allAverages2 <- bind_rows(players2024, mlbPlayers2024)
+
+eligiblePitches2 <- allAverages2 |>
+  group_by(id) |>
+  summarise(rows = n()) |>
+  filter(rows != 2)
+
+
+cleanAAA2024 <- players2024 |>
+  filter(id %in% eligiblePitches2$id)
+```
+
+
+
+# Export the True Averages
+
+```{r}
+write.csv(cleanAAA2024, '2024 Pitcher Arsenals.csv')
+```
+
+
+
+# Adjust to MLB Averages
+
+
+```{r}
+cleanAAA2024$adjustVelo30 <- 0
+cleanAAA2024$adjustVelo70 <- 0
+cleanAAA2024$adjustIVB <- 0
+cleanAAA2024$adjustHB <- 0
+cleanAAA2024$adjustSpin <- 0
+cleanAAA2024$adjustVAA <- 0
+
+for(i in 1:dim(cleanAAA2024)[1]){
+  cleanAAA2024$adjustVelo30[i] = cleanAAA2024$velo30[i] + averageDiff[averageDiff$League.x == cleanAAA2024$League[i] & cleanAAA2024$details.type.description[i] == averageDiff$details.type.description.x,]$Velo
+  cleanAAA2024$adjustVelo70[i] = cleanAAA2024$velo70[i] + averageDiff[averageDiff$League.x == cleanAAA2024$League[i] & cleanAAA2024$details.type.description[i] == averageDiff$details.type.description.x,]$Velo
+  cleanAAA2024$adjustIVB[i] = cleanAAA2024$IVB[i] + averageDiff[averageDiff$League.x == cleanAAA2024$League[i] & cleanAAA2024$details.type.description[i] == averageDiff$details.type.description.x,]$IVB
+  cleanAAA2024$adjustHB[i] = cleanAAA2024$HB[i] + averageDiff[averageDiff$League.x == cleanAAA2024$League[i] & cleanAAA2024$details.type.description[i] == averageDiff$details.type.description.x,]$HB
+  cleanAAA2024$adjustSpin[i] = cleanAAA2024$Spin[i] + averageDiff[averageDiff$League.x == cleanAAA2024$League[i] & cleanAAA2024$details.type.description[i] == averageDiff$details.type.description.x,]$Spin
+  cleanAAA2024$adjustVAA[i] = cleanAAA2024$VAA[i] + averageDiff[averageDiff$League.x == cleanAAA2024$League[i] & cleanAAA2024$details.type.description[i] == averageDiff$details.type.description.x,]$VAA
+}
+```
+
+
+
+```{r}
+adjustedAAA2024 <- cleanAAA2024 |>
+  select(matchup.pitcher.id, matchup.pitcher.fullName, details.type.description, fielding_team, adjustVelo30, adjustVelo70, adjustIVB, adjustHB, adjustSpin, adjustVAA)
+
+colnames(adjustedAAA2024) <- c('matchup.pitcher.id', 'matchup.pitcher.fullName', 'details.type.description', 'fielding_team', 'Velo30', 'Velo70', 'IVB', 'HB', 'Spin', 'VAA')
+
+adjustedAAA2024 <- adjustedAAA2024 |>
+  mutate(fielding_team = case_when(
+    fielding_team == 'Buffalo Bisons' ~ 'Toronto Blue Jays',
+    fielding_team == 'Charlotte Knights' ~ 'Chicago White Sox',
+    fielding_team == 'Columbus Clippers' ~ 'Cleveland Guardians',
+    fielding_team == 'Durham Bulls' ~ 'Tampa Bay Rays',
+    fielding_team == 'Gwinnett Stripers' ~ 'Atlanta Braves',
+    fielding_team == 'Indianapolis Indians' ~ 'Pittsburgh Pirates',
+    fielding_team == 'Iowa Cubs' ~ 'Chicago Cubs',
+    fielding_team == 'Jacksonville Jumbo Shrimp' ~ 'Miami Marlins',
+    fielding_team == 'Lehigh Valley IronPigs' ~ 'Philadelphia Phillies',
+    fielding_team == 'Louisville Bats' ~ 'Memphis Redbirds',
+    fielding_team == 'Nashville Sounds' ~ 'Milwaukee Brewers',
+    fielding_team == 'Norfolk Tides' ~ 'Baltimore Orioles',
+    fielding_team == 'Omaha Storm Chasers' ~ 'Kansas City Royals',
+    fielding_team == 'Rochester Red Wings' ~ 'Washington Nationals',
+    fielding_team == 'Scranton/Wilkes-Barre RailRiders' ~ 'New York Yankees',
+    fielding_team == 'St. Paul Saints' ~ 'Minnesota Twins',
+    fielding_team == 'Syracuse Mets' ~ 'New York Mets',
+    fielding_team == 'Toledo Mud Hens' ~ 'Detroit Tigers',
+    fielding_team == 'Worcester Red Sox' ~ 'Boston Red Sox',
+    fielding_team == 'Albuquerque Isotopes' ~ 'Colorado Rockies',
+    fielding_team == 'El Paso Chihuahuas' ~ 'San Diego Padres',
+    fielding_team == 'Las Vegas Aviators' ~ 'Oakland Athletics',
+    fielding_team == 'Oklahoma City Baseball Club' ~ 'Los Angeles Dodgers',
+    fielding_team == 'Reno Aces' ~ 'Arizona Diamondbacks',
+    fielding_team == 'Round Rock Express' ~ 'Texas Rangers',
+    fielding_team == 'Sacramento River Cats' ~ 'San Francisco Giants',
+    fielding_team == 'Salt Lake Bees' ~ 'Los Angeles Angels',
+    fielding_team == 'Sugar Land Space Cowboys' ~ 'Houston Astros',
+    fielding_team == 'Tacoma Rainiers' ~ 'Seattle Mariners'
+  ))
+```
+
+
+
+```{r}
+write.csv(adjustedAAA2024, 'Adjusted AAA to MLB Pitch Metrics 2024.csv')
+```
+
+
+
+# Export All Pitches for Heat Maps
+
+
+```{r}
+aaaPitchLocation <- aaa2024 |>
+  filter(matchup.pitcher.id %in% cleanAAA2024$matchup.pitcher.id) |>
+  select(matchup.pitcher.id, matchup.pitcher.fullName, details.type.description, pitchData.coordinates.x, pitchData.coordinates.y)
+
+write.csv(aaaPitchLocation, 'AAA Pitch Location 2024.csv')
+```
+
+
+
+
+
+
+# Find Closest MLB Comps to Each Pitch from Each AAA Player
+
+The two closest comps in the 2024 MLB season will be shown, and their Savant hyperlinks downloaded.
+
+
+
+
+```{r}
+cleanMLB2024 <- mlbPlayers2024 |>
+  select(matchup.pitcher.id, matchup.pitcher.fullName, details.type.description, fielding_team, velo30, velo70, IVB, HB, Spin, VAA)
+
+colnames(cleanMLB2024) <- c('matchup.pitcher.id', 'matchup.pitcher.fullName', 'details.type.description', 'fielding_team', 'Velo30', 'Velo70', 'IVB', 'HB', 'Spin', 'VAA')
+```
+
+
+
+```{r}
+##Inputs
+aaaInputs <- adjustedAAA2024 |>
+  ungroup() |>
+  select(details.type.description, Velo30, Velo70, IVB, HB, Spin, VAA)
+
+mlbInputs <- cleanMLB2024 |>
+  ungroup() |>
+  select(details.type.description, Velo30, Velo70, IVB, HB, Spin, VAA)
+
+
+```
+
+
+
+## Closest Comps Using Euclidean Distance
+
+```{r, warning = FALSE}
+#Initialize Information
+aaaID <- vector()
+aaaName <- vector()
+aaaPitch <- vector()
+compID1 <- vector()
+compName1 <- vector()
+compPitch1 <- vector()
+compID2 <- vector()
+compName2 <- vector()
+compPitch2 <- vector()
+
+
+for(i in 1:dim(aaaInputs)[1]){
+  aaaID <- append(aaaID, adjustedAAA2024[i,]$matchup.pitcher.id)
+  aaaName <- append(aaaName, adjustedAAA2024[i,]$matchup.pitcher.fullName)
+  aaaPitch <- append(aaaPitch, adjustedAAA2024[i,]$details.type.description)
+
+#Closest Pitch 
+  results <- which.min(dist(rbind(aaaInputs[i,], mlbInputs), 'euclidean', diag = FALSE, upper = FALSE)[1:nrow(mlbInputs)])
+  
+  resultInfo <- mlbInputs[results,]
+  
+  allResultInfo <- cleanMLB2024 |>
+    filter(IVB == resultInfo$IVB &
+           HB == resultInfo$HB)
+  
+  compID1 <- append(compID1, allResultInfo$matchup.pitcher.id)
+  compName1 <- append(compName1, allResultInfo$matchup.pitcher.fullName)
+  compPitch1 <- append(compPitch1, allResultInfo$details.type.description)
+  
+#Second Closest Pitch 
+  results2 <- which.min(dist(rbind(aaaInputs[i,], mlbInputs[-results,]), 'euclidean', diag = FALSE, upper = FALSE)[1:nrow(mlbInputs) - 1])
+  
+  resultInfo2 <- mlbInputs[results2,]
+  
+  allResultInfo2 <- cleanMLB2024 |>
+    filter(IVB == resultInfo2$IVB &
+           HB == resultInfo2$HB)
+  
+  compID2 <- append(compID2, allResultInfo2$matchup.pitcher.id)
+  compName2 <- append(compName2, allResultInfo2$matchup.pitcher.fullName)
+  compPitch2 <- append(compPitch2, allResultInfo2$details.type.description)
+}
+
+
+compPitchers <- data.frame(aaaID, aaaName, aaaPitch, compID1, compName1, compPitch1, compID2, compName2, compPitch2)
+
+
+compPitchers
+
+```
+
+## Baseball Savant Run Values for Each MLB Comp
+
+
+```{r}
+compRVPer1 <- vector()
+compRV1 <- vector()
+compLink1 <- vector()
+compRVPer2 <- vector()
+compRV2 <- vector()
+compLink2 <- vector()
+
+for(i in 1:dim(compPitchers)[1]){
+  firstName1 <- tolower(str_split(compPitchers$compName1[i], ' ')[[1]][1])
+  lastName1 <- tolower(str_split(compPitchers$compName1[i], ' ')[[1]][2])
+  print(paste0(firstName1, lastName1))
+  
+  savantLink1 <- paste0('https://baseballsavant.mlb.com/savant-player/',
+                        firstName1,
+                        '-',
+                        lastName1,
+                        '-',
+                        compPitchers$compID1[i],
+                       '?stats=statcast-r-pitching-mlb')
+  compLink1 <- append(compLink1, savantLink1)
+  
+  comp1RV <- savantLink1 |>
+  read_html() |>
+  html_nodes(xpath = '/html/body/div[2]/section/div/section/div[5]/section/div[1]/div[21]') |>
+  html_table() |>
+  as.data.frame() |>
+  filter(X1 == 2024) |>
+  filter(case_when(
+    X2 == 'Split-Finger' ~ 'Splitter',
+    .default = X2
+  ) == compPitchers$compPitch1[i])
+  
+  compRV1 <- comp1RV$X5
+  compRVPer1 <- comp1RV$X4
+  
+  
+  firstName2 <- tolower(str_split(compPitchers$compName2[i], ' ')[[1]][1])
+  lastName2 <- tolower(str_split(compPitchers$compName2[i], ' ')[[1]][2])
+  print(paste0(firstName2, lastName2))
+  savantLink2 <- paste0('https://baseballsavant.mlb.com/savant-player/',
+                        firstName2,
+                        '-',
+                        lastName2,
+                        '-',
+                        compPitchers$compID2[i],
+                       '?stats=statcast-r-pitching-mlb')
+  compLink2 <- append(compLink2, savantLink2)
+  
+  comp2RV <- savantLink2 |>
+  read_html() |>
+  html_nodes(xpath = '/html/body/div[2]/section/div/section/div[5]/section/div[1]/div[21]') |>
+  html_table() |>
+  as.data.frame() |>
+  filter(X1 == 2024) |>
+  filter(case_when(
+    X2 == 'Split-Finger' ~ 'Splitter',
+    .default = X2
+  ) == compPitchers$compPitch2[i])
+  
+  compRV2 <- append(compRV2, comp2RV$X5)
+  compRVPer2 <- append(compRVPer2, comp2RV$X4)
+}
+
+
+fullCompInfo <- cbind(compPitchers, compRVPer1, compRV1, compLink1, compRVPer2, compRV2, compLink2)
+
+
+fullCompInfo
+```
+
+
+
+
+```{r}
+write.csv(fullCompInfo, 'Best Comp for Each AAA Adjusted Pitch 2024.csv')
+```
+
+
+
+
+
+```{r}
+pitcherName1 <- 'Casey Mize'
+#Web Scrape Test: Get Pitch Run Values from Savant
+firstName1 <- tolower(str_split(pitcherName1, ' ')[[1]][1])
+lastName1 <- tolower(str_split(pitcherName1, ' ')[[1]][2])
+savantTest <- paste0('https://baseballsavant.mlb.com/savant-player/',
+                      firstName1,
+                      '-',
+                      lastName1,
+                      '-',
+                      pitcherID1,
+                     '?stats=statcast-r-pitching-mlb')
+
+runValues2024 <- savantTest |>
+read_html() |>
+html_nodes(xpath = '/html/body/div[2]/section/div/section/div[5]/section/div[1]/div[21]') |>
+html_table() |>
+as.data.frame() |>
+filter(X1 == 2024) |>
+filter(case_when(
+  X2 == 'Split-Finger' ~ 'Splitter',
+  .default = X2
+) == pitchType1) |>
+select(X2, X4, X5) |>
+mutate(ID = pitcherID1,
+       Name = pitcherName1,
+       X2 = case_when(
+        X2 == 'Split-Finger' ~ 'Splitter',
+        .default = X2)
+)
+
+colnames(runValues2024) <- c('Pitch Type', 'RV/100', 'RV', 'ID', 'Name')
+
+runValues2024
+```
+
+
+
+
+
+# Find MLB Results for Projected AAA Pitches
+
+
+For each pitcher and their AAA arsenal, KPIs for pitches that fit within this range will be considered (adjust as necessary for sample size):
+
+* Velo within 1 MPH of actual Velo
+* IVB within 3" of projected IVB
+* HB within 3" of projected HB
+* Spin within 100 RPM of projected Spin
+* VAA within 0.5 degrees of projected VAA
+
+
+The 2023 MLB pitches that fit within this range will be used as a projection for 2024 performance if they were in the MLB.
+
+
+KPIs used (adjust as necessary):
+
+* Number of Pitches in Range
+* SWM%
+* GB%
+* Nitro/Barrel%
+* wOBA Against
+* InZone% or Strike% or IZ SWM%
+
+
+```{r}
+projectedPerformance <- data.frame()
+
+for(i in 1:2){
+  pitcherID <- cleanAAA2024$matchup.pitcher.id[i]
+  pitcherName <- cleanAAA2024$matchup.pitcher.fullName[i]
+  pitchType <- cleanAAA2024$details.type.description[i]
+  mlb2023Sample <- mlb2023 |>
+    filter(details.type.description == pitchType) |>
+    filter(pitchData.startSpeed - 1 < cleanAAA2024[cleanAAA2024$matchup.pitcher.id == pitcherID,]$velo50 < pitchData.startSpeed + 1)
+  
+  
+    filter(pitchData.breaks.breakVerticalInduced - 3 < cleanAAA2024[cleanAAA2024$matchup.pitcher.id == pitcherID,]$IVB < pitchData.breaks.breakVerticalInduced + 3) |>
+    filter(pitchData.breaks.breakHorizontal - 3 < cleanAAA2024[cleanAAA2024$matchup.pitcher.id == pitcherID,]$HB < pitchData.breaks.breakHorizontal + 3) |>
+    filter(pitchData.breaks.spinRate - 100 < cleanAAA2024[cleanAAA2024$matchup.pitcher.id == pitcherID,]$Spin < pitchData.breaks.spinRate + 100)
+  
+  
+  infoRow <- data.frame(PitcherID = pitcherID,
+                        Name = pitcherName,
+                        PitchType = pitchType,
+                        NumPitch = dim(mlb2023Sample)[1],
+                        wOBANum = sum(case_when(
+                           result.eventType == 'walk' ~ 0.697,
+                           result.eventType == 'hit_by_pitch' ~ 0.729,
+                           result.eventType == 'single' ~ 0.896,
+                           result.eventType == 'double' ~ 1.280,
+                           result.eventType == 'triple' ~ 1.626,
+                           result.eventType == 'home_run' ~ 2.103,
+                           .default = 0
+                         ), na.rm = TRUE),
+                       wOBADenom = length(unique(paste(startTime,matchup.batter.fullName))) - 
+                           sum(ifelse(result.eventType == 'intent_walk', 1, 0), na.rm = TRUE),
+  ) |>
+    mutate(wOBA = wOBANum / wOBADenom)
+  projectedPerformance <- rbind(projectedPerformance, infoRow)
+}
+
+projectedPerformance
+```
+
