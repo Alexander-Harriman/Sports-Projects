@@ -1,0 +1,115 @@
+---
+title: "Passer Rating Aging Curve Project V0.1"
+author: "Alexander Harriman"
+date: "2024-07-29"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+This project will create a baseline aging curve for NFL Passer Rating. After generating a curve, expected growth and decline will be used to determine which NFL QBs overperformed and underperformed in the 2023 season before providing a baseline expectation for QBs entering the 2024 season.
+
+
+
+```{r, warning = FALSE}
+library(dplyr)
+library(tidyverse)
+library(rvest)
+library(xml2)
+```
+
+
+# Load NFL Stats Data
+
+Information will be loaded starting in the 2006 season, as ESPN QBR (found on Football Reference) dates back to this year.
+
+
+```{r, warning = FALSE}
+qbData <- data.frame()
+
+for(i in 2006:2023){
+  print(i)
+  fbRefLink <<- paste0('https://www.pro-football-reference.com/years/',
+                      i,
+                      '/passing.htm')
+
+  webScrape <- fbRefLink |>
+    read_html() |>
+    html_nodes('table') |>
+    html_table()
+  
+  singleSeason <- webScrape[[1]]
+  
+  #Filter down to QBs with 100+ Attempts
+  singleSeason <- singleSeason[-c(27)] |>
+    mutate(Year = i) |>
+    filter(Att >= 100)
+
+  #Clean up QB Names
+  singleSeason$Player <- stringr::str_replace(singleSeason$Player, '\\*', '')
+  singleSeason$Player <- stringr::str_replace(singleSeason$Player, '\\+', '')
+  
+  
+  #Convert Stats to Numeric Values
+  numericCols <- c(4, 6, 7, 9:31)
+  
+  singleSeason[numericCols] <- sapply(singleSeason[numericCols], as.numeric)
+  
+  qbData <- rbind(qbData, singleSeason)
+   
+}
+
+qbData <- qbData |>
+  filter(Player != 'Player')
+
+
+qbData
+```
+
+
+# Adjust Passer Rating to Season Average
+
+Each NFL season has a different passing environment for several factors (rule changes, injury variation, etc.). To compare each year on a level playing field, passer rating will be adjusted to PasserRating+. 100 will be NFL average, with higher representing better relative to their peers.
+
+
+```{r}
+avgPasserRating <- qbData |> 
+  mutate(prWeight = GS * Rate) |>
+  group_by(Year) |>
+  summarise(avgPR = sum(prWeight) / sum(GS))
+
+avgPasserRating
+```
+
+
+
+```{r}
+for(i in 1:dim(qbData)[1]){
+  qbData$adjustedRate[i] = (100.0*qbData$Rate[i]) / avgPasserRating[avgPasserRating$Year == qbData$Year[i],]$avgPR
+}
+
+qbData
+```
+
+
+
+# Find Career Averages for Each Player
+
+
+To account for selection bias at both ends of the aging curve, the player statistic in relation to their career average will also be included. 
+
+
+# Create Aging Curve
+
+
+
+Adjust the approach seen here to create an aging curve for the QB metrics:
+
+model <- gam(stat ~ s(Age) + career_stat, data = dataset, weights = PA)
+
+
+
