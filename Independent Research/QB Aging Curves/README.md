@@ -1,0 +1,1 @@
+This folder contains code that creates an advanced aging curve for ESPN's Quarterback Rating (QBR) and Passer Rating. The ultimate goal is to create a baseline prediction for each QB's statistics ahead of the 2024 NFL season.
