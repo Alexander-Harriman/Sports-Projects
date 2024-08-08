@@ -1,0 +1,76 @@
+---
+title: "Passer Rating Aging Curve Project V0.1"
+author: "Alexander Harriman"
+date: "2024-07-29"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+This project will create a baseline aging curve for NFL Passer Rating. After generating a curve, expected growth and decline will be used to determine which NFL QBs overperformed and underperformed in the 2023 season before providing a baseline expectation for QBs entering the 2024 season.
+
+
+# Load NFL Stats Data
+
+
+```{r}
+qbData <- 
+    list.files(pattern = "\\.csv$") %>% 
+    map_df(~fread(.))
+
+qbData <- data.frame()
+
+fileList <- list.files(pattern = '\\.csv$')
+
+for(i in 1:length(fileList)){
+  season <- read.csv(fileList[i]) |>
+    mutate(Year = 2005 + i)
+  
+  qbData <- rbind(qbData, season)
+}
+
+
+qbData <- qbData |>
+  filter(GS > 0)
+
+qbData$Player <- stringr::str_replace(qbData$Player, '\\*', '')
+qbData$Player <- stringr::str_replace(qbData$Player, '\\+', '')
+
+qbData
+```
+
+
+
+# Adjust Passer Rating to Season Average
+
+Each NFL season has a different passing environment for several factors (rule changes, injury variation, etc.). To compare each year on a level playing field, passer rating will be adjusted to PasserRating+. 100 will be NFL average, with higher representing better relative to their peers.
+
+
+```{r}
+avgPasserRating <- qbData |> 
+  mutate(prWeight = GS * Rate) |>
+  group_by(Year) |>
+  summarise(avgPR = sum(prWeight) / sum(GS))
+
+avgPasserRating
+```
+
+
+
+```{r}
+for(i in 1:dim(qbData)[1]){
+  qbData$adjustedRate[i] = (100.0*qbData$Rate[i]) / avgPasserRating[avgPasserRating$Year == qbData$Year[i],]$avgPR
+}
+
+qbData
+```
+
+
+
+# Create Aging Curve
+
+
