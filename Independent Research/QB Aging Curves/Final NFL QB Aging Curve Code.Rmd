@@ -1,0 +1,895 @@
+---
+title: "Passer Rating Aging Curve Project V0.1"
+author: "Alexander Harriman"
+date: "2024-07-29"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+This project will create a baseline aging curve for NFL Passer Rating. After generating a curve, expected growth and decline will be used to determine which NFL QBs overperformed and underperformed in the 2023 season before providing a baseline expectation for QBs entering the 2024 season.
+
+
+
+```{r, warning = FALSE, echo = FALSE}
+library(dplyr)
+library(tidyverse)
+library(rvest)
+library(xml2)
+library(mgcv)
+library(ggplot2)
+library(ggpubr)
+```
+
+
+# Load NFL Stats Data
+
+Information will be loaded starting in the 2006 season, as ESPN QBR (found on Football Reference) dates back to this year.
+
+
+```{r, warning = FALSE}
+qbData <- data.frame()
+
+for(i in 2006:2023){
+  fbRefLink <<- paste0('https://www.pro-football-reference.com/years/',
+                      i,
+                      '/passing.htm')
+
+  webScrape <- fbRefLink |>
+    read_html() |>
+    html_nodes('table') |>
+    html_table()
+  
+  singleSeason <- webScrape[[1]]
+  
+
+  singleSeason <- singleSeason[-c(27)] |>
+    mutate(Year = i) 
+
+  #Clean up QB Names
+  singleSeason$Player <- stringr::str_replace(singleSeason$Player, '\\*', '')
+  singleSeason$Player <- stringr::str_replace(singleSeason$Player, '\\+', '')
+  
+  
+  #Convert Stats to Numeric Values
+  numericCols <- c(4, 6, 7, 9:31)
+  
+  singleSeason[numericCols] <- sapply(singleSeason[numericCols], as.numeric)
+  
+  qbData <- rbind(qbData, singleSeason)
+   
+}
+
+#Filter down to QBs with 100+ Attempts
+rawData <- qbData |>
+  filter(Player != 'Player',
+         Att >= 100)
+
+
+rawData
+```
+
+
+
+# Remove Multiple Row Data
+
+
+QBs with multiple teams may appear for each team, along with their total year stats. This will remove any duplicated information.
+
+
+```{r}
+qbCheck <- rawData |>
+  group_by(Player, Year) |>
+  summarise(n = n(),
+            attemptMax = max(Att)) |>
+  mutate(playerSeasonID = paste(Player,Year)) |>
+  filter(n > 1)
+
+qbCheck
+
+
+qbData <- rawData |>
+  mutate(playerSeasonID = paste(Player,Year)) |>
+  filter((!playerSeasonID %in% qbCheck$playerSeasonID) | (playerSeasonID %in% qbCheck$playerSeasonID & !Att %in% qbCheck$attemptMax))
+
+qbData
+```
+
+
+# Adjust Statistics to Season Average
+
+Each NFL season has a different passing environment for several factors (rule changes, injury variation, etc.). To compare each year on a level playing field, each statistic will be adjusted to a plus metric, similar to baseball. 100 will be NFL average, with higher representing better relative to their peers.
+
+
+## Passer Rating
+
+
+```{r}
+avgPasserRating <- qbData |> 
+  mutate(prWeight = Att * Rate) |>
+  group_by(Year) |>
+  summarise(avgPR = sum(prWeight) / sum(Att))
+
+avgPasserRating
+```
+
+
+
+```{r}
+for(i in 1:dim(qbData)[1]){
+  qbData$adjustedRate[i] = (100.0*qbData$Rate[i]) / avgPasserRating[avgPasserRating$Year == qbData$Year[i],]$avgPR
+}
+
+qbData
+```
+
+
+## Quarterback Rating (QBR)
+
+
+```{r}
+avgQBR <- qbData |> 
+  mutate(qbrWeight = Att * QBR) |>
+  group_by(Year) |>
+  summarise(avgQBRate = sum(qbrWeight, na.rm = TRUE) / sum(Att))
+
+avgQBR
+```
+
+
+
+```{r}
+for(i in 1:dim(qbData)[1]){
+  qbData$adjustedQBR[i] = (100.0*qbData$QBR[i]) / avgQBR[avgQBR$Year == qbData$Year[i],]$avgQBRate
+}
+
+qbData
+```
+
+
+
+## Adjusted Net Yards Per Attempt (ANY/A)
+
+
+
+
+```{r}
+avgANYA <- qbData |> 
+  mutate(anyaWeight = Att * `ANY/A`) |>
+  group_by(Year) |>
+  summarise(avgANYA = sum(anyaWeight, na.rm = TRUE) / sum(Att))
+
+avgANYA
+```
+
+
+
+```{r}
+for(i in 1:dim(qbData)[1]){
+  qbData$adjustedANYA[i] = (100.0*qbData$`ANY/A`[i]) / avgANYA[avgANYA$Year == qbData$Year[i],]$avgANYA
+}
+
+qbData
+```
+
+
+
+## Yards Per Attempt
+
+Used as a proxy for QB arm power
+
+
+
+```{r}
+avgYPA <- qbData |> 
+  mutate(ypaWeight = Att * `Y/A`) |>
+  group_by(Year) |>
+  summarise(avgYPA = sum(ypaWeight, na.rm = TRUE) / sum(Att))
+
+avgYPA
+```
+
+
+
+```{r}
+for(i in 1:dim(qbData)[1]){
+  qbData$adjustedYPA[i] = (100.0*qbData$`Y/A`[i]) / avgYPA[avgYPA$Year == qbData$Year[i],]$avgYPA
+}
+
+qbData
+```
+
+
+
+
+
+## Completion Percentage
+
+Used as a proxy for accuracy 
+
+
+
+
+
+```{r}
+avgComp <- qbData |> 
+  mutate(compWeight = Att * `Cmp%`) |>
+  group_by(Year) |>
+  summarise(avgComp = sum(compWeight, na.rm = TRUE) / sum(Att))
+
+avgComp
+```
+
+
+
+```{r}
+for(i in 1:dim(qbData)[1]){
+  qbData$adjustedComp[i] = (100.0*qbData$`Cmp%`[i]) / avgComp[avgComp$Year == qbData$Year[i],]$avgComp
+}
+
+qbData
+```
+
+
+
+
+
+# Find Career Averages for Each Player
+
+
+To account for selection bias at both ends of the aging curve, the player statistic in relation to their career average will also be included. 
+
+
+
+
+```{r}
+qbData <- qbData |>
+  mutate(rateWeight = Att * adjustedRate,
+         qbrWeight = Att * adjustedQBR,
+         anyaWeight = Att * adjustedANYA,
+         ypaWeight = Att * adjustedYPA,
+         compWeight = Att * adjustedComp)
+
+
+
+careerAvg <- qbData |>
+  group_by(Player) |>
+  summarise(Years = n(),
+            Attempts = sum(Att),
+            PasserRating = sum(rateWeight) / sum(Att),
+            QBRate = sum(qbrWeight) / sum(Att),
+            ANYA = sum(anyaWeight) / sum(Att),
+            YPA = sum(ypaWeight) / sum(Att),
+            CompRate = sum(compWeight) / sum(Att))
+
+
+careerAvg
+```
+
+
+
+## Join Season and Career Stats
+
+
+
+```{r}
+allInformation <- left_join(qbData, careerAvg, by = 'Player')
+
+
+allInformation
+```
+
+
+# Create Aging Curve
+
+
+The adjusted QB+ metrics will be used as part of separate aging curves to determine how player performance relative to league average age over time. A generative additive model (GAM) will be used to create these curves.
+
+Since selection bias would keep only the best young and old players (and thus cause the aging curve to warp), the player's career average will be added to the model equation as an equalizing measure.
+
+
+
+## Filter Out Application Data
+
+The curve will only include players through the 2022 seasons; the 2023 data will be used as an application later in the project.
+
+
+
+```{r}
+allInformation <- allInformation |>
+  filter(Age <= 42)
+```
+
+
+
+```{r}
+inputData <- allInformation |>
+  filter(Year <= 2022)
+
+applicationData <- allInformation |>
+  filter(Year >= 2023)
+```
+
+
+
+## Passer Rate Aging Curve
+
+
+```{r}
+passerRateModel <- gam(adjustedRate ~ s(Age, k = 9) + PasserRating, data = inputData, method = "REML")
+
+summary(passerRateModel)
+```
+
+
+
+
+```{r}
+mgcv::plot.gam(passerRateModel, shade = TRUE, shade.col = 'lightblue', seWithMean = TRUE, shift = coef(passerRateModel)[2], ylab = 'PasserRate+ Above Career Average', main = 'PasserRate+ Aging Curve')
+```
+
+
+
+## Check Model
+
+
+```{r}
+gam.check(passerRateModel)
+```
+
+
+# Apply to 2023 Data
+
+```{r}
+lastRatePred <- predict.gam(passerRateModel, applicationData)
+
+fullApp <- cbind(applicationData, lastRatePred)
+
+fullApp
+```
+
+
+
+```{r}
+ggplot(fullApp, aes(x = adjustedRate, y = lastRatePred)) +
+  geom_point() +
+  geom_smooth(method = 'lm') +
+  xlab('Actual PassRate+') +
+  ylab('Predicted PassRate+') +
+  ggtitle('Predicted PassRate+ vs. Actual PassRate+, 2023 Season') +
+  stat_regline_equation(label.y = 110, aes(label = after_stat(rr.label)))
+```
+
+
+
+
+
+## Make Predictions for 2024 Data
+
+
+```{r}
+app2024 <- fullApp |>
+  mutate(Age = Age + 1)
+
+app2024
+```
+
+
+
+```{r}
+nextRatePred <- predict.gam(passerRateModel, app2024)
+
+fullApp24 <- cbind(app2024, nextRatePred)
+
+fullApp24
+```
+
+
+
+```{r}
+ggplot(fullApp24, aes(x = lastRatePred, y = nextRatePred)) +
+  geom_point() +
+  geom_smooth(method = 'lm') +
+  xlab('2023 PassRate+') +
+  ylab('2024 PassRate+') +
+  ggtitle('PassRate+ Predictions, 2024 Season') +
+  stat_regline_equation(label.y = 110, aes(label = after_stat(rr.label)))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## QBR Aging Curve
+
+
+
+```{r}
+qbRModel <- gam(adjustedQBR ~ s(Age, k = 9) + QBRate, data = inputData, method = "REML")
+
+summary(qbRModel)
+```
+
+
+
+
+```{r}
+mgcv::plot.gam(qbRModel, shade = TRUE, shade.col = 'aquamarine', seWithMean = TRUE, shift = coef(qbRModel)[2], ylab = 'QBR+ Above Career Average', main = 'QBR+ Aging Curve')
+```
+
+
+
+## Check Model
+
+
+```{r}
+gam.check(qbRModel)
+```
+
+
+# Apply to 2023 Data
+
+```{r}
+lastQBRPred <- predict.gam(qbRModel, applicationData)
+
+fullApp <- cbind(fullApp, lastQBRPred)
+
+fullApp
+```
+
+
+
+```{r}
+ggplot(fullApp, aes(x = adjustedQBR, y = lastQBRPred)) +
+  geom_point() +
+  geom_smooth(method = 'lm') +
+  xlab('Actual QBR+') +
+  ylab('Predicted QBR+') +
+  ggtitle('Predicted QBR+ vs. Actual QBR+, 2023 Season') +
+  stat_regline_equation(label.y = 110, aes(label = after_stat(rr.label)))
+```
+
+
+
+
+
+## Make Predictions for 2024 Data
+
+
+```{r}
+nextQBRPred <- predict.gam(qbRModel, fullApp24)
+
+fullApp24 <- cbind(fullApp24, nextQBRPred)
+
+fullApp24
+```
+
+
+
+```{r}
+ggplot(fullApp24, aes(x = lastQBRPred, y = nextQBRPred)) +
+  geom_point() +
+  geom_smooth(method = 'lm') +
+  xlab('2023 QBR+') +
+  ylab('2024 QBR+') +
+  ggtitle('QBR+ Predictions, 2024 Season') +
+  stat_regline_equation(label.y = 110, aes(label = after_stat(rr.label)))
+```
+
+
+
+
+## Adjusted Net Yards Per Attempt Aging Curve
+
+
+
+```{r}
+anyaModel <- gam(adjustedANYA ~ s(Age, k = 8) + ANYA, data = inputData, method = "REML")
+
+summary(anyaModel)
+```
+
+
+
+
+```{r}
+mgcv::plot.gam(anyaModel, shade = TRUE, shade.col = 'coral', seWithMean = TRUE, shift = coef(anyaModel)[2], ylab = 'ANY/A+ Above Career Average', main = 'ANY/A+ Aging Curve')
+```
+
+
+
+## Check Model
+
+
+```{r}
+gam.check(anyaModel)
+```
+
+
+# Apply to 2023 Data
+
+```{r}
+lastANYAPred <- predict.gam(anyaModel, fullApp)
+
+fullApp <- cbind(fullApp, lastANYAPred)
+
+fullApp
+```
+
+
+
+```{r}
+ggplot(fullApp, aes(x = adjustedANYA, y = lastANYAPred)) +
+  geom_point() +
+  geom_smooth(method = 'lm') +
+  xlab('Actual ANY/A+') +
+  ylab('Predicted ANY/A+') +
+  ggtitle('Predicted ANY/A+ vs. Actual ANY/A+, 2023 Season') +
+  stat_regline_equation(label.y = 110, aes(label = after_stat(rr.label)))
+```
+
+
+
+
+
+## Make Predictions for 2024 Data
+
+
+
+```{r}
+nextANYAPred <- predict.gam(anyaModel, fullApp24)
+
+fullApp24 <- cbind(fullApp24, nextANYAPred)
+
+fullApp24
+```
+
+
+
+```{r}
+ggplot(fullApp24, aes(x = lastANYAPred, y = nextANYAPred)) +
+  geom_point() +
+  geom_smooth(method = 'lm') +
+  xlab('2023 ANY/A+') +
+  ylab('2024 ANY/A+') +
+  ggtitle('ANY/A+ Predictions, 2024 Season') +
+  stat_regline_equation(label.y = 110, aes(label = after_stat(rr.label)))
+```
+
+
+
+
+
+## Yards Per Attempt Aging Curve
+
+
+
+
+```{r}
+ypaModel <- gam(adjustedYPA ~ s(Age, k = 8) + YPA, data = inputData, method = "REML")
+
+summary(ypaModel)
+```
+
+
+
+
+```{r}
+mgcv::plot.gam(ypaModel, shade = TRUE, shade.col = 'gold', seWithMean = TRUE, shift = coef(ypaModel)[2], ylab = 'Y/A+ Above Career Average', main = 'Y/A+ Aging Curve')
+```
+
+
+
+## Check Model
+
+
+```{r}
+gam.check(ypaModel)
+```
+
+
+# Apply to 2023 Data
+
+```{r}
+lastYPAPred <- predict.gam(ypaModel, fullApp)
+
+fullApp <- cbind(fullApp, lastYPAPred)
+
+fullApp
+```
+
+
+
+```{r}
+ggplot(fullApp, aes(x = adjustedYPA, y = lastYPAPred)) +
+  geom_point() +
+  geom_smooth(method = 'lm') +
+  xlab('Actual Y/A+') +
+  ylab('Predicted Y/A+') +
+  ggtitle('Predicted Y/A+ vs. Actual Y/A+, 2023 Season') +
+  stat_regline_equation(label.y = 110, aes(label = after_stat(rr.label)))
+```
+
+
+
+
+
+## Make Predictions for 2024 Data
+
+```{r}
+nextYPAPred <- predict.gam(ypaModel, fullApp24)
+
+fullApp24 <- cbind(fullApp24, nextYPAPred)
+
+fullApp24
+```
+
+
+
+```{r}
+ggplot(fullApp24, aes(x = lastYPAPred, y = nextYPAPred)) +
+  geom_point() +
+  geom_smooth(method = 'lm') +
+  xlab('2023 Y/A+') +
+  ylab('2024 Y/A+') +
+  ggtitle('Y/A+ Predictions, 2024 Season') +
+  stat_regline_equation(label.y = 110, aes(label = after_stat(rr.label)))
+```
+
+
+
+
+
+
+## Completion% Aging Curve
+
+
+```{r}
+compModel <- gam(adjustedComp ~ s(Age, k = 9) + CompRate, data = inputData, method = "REML")
+
+summary(compModel)
+```
+
+
+
+
+```{r}
+mgcv::plot.gam(compModel, shade = TRUE, shade.col = 'honeydew', seWithMean = TRUE, shift = coef(compModel)[2], ylab = 'Completion+ Above Career Average', main = 'Completion+ Aging Curve')
+```
+
+
+
+## Check Model
+
+
+```{r}
+gam.check(compModel)
+```
+
+
+# Apply to 2023 Data
+
+```{r}
+lastCompPred <- predict.gam(compModel, fullApp)
+
+fullApp <- cbind(fullApp, lastCompPred)
+
+fullApp
+```
+
+
+
+```{r}
+ggplot(fullApp, aes(x = adjustedComp, y = lastCompPred)) +
+  geom_point() +
+  geom_smooth(method = 'lm') +
+  xlab('Actual Completion+') +
+  ylab('Predicted Completion+') +
+  ggtitle('Predicted Completion+ vs. Actual Completion+, 2023 Season') +
+  stat_regline_equation(label.y = 110, aes(label = after_stat(rr.label)))
+```
+
+
+
+
+
+## Make Predictions for 2024 Data
+
+
+```{r}
+nextCompPred <- predict.gam(compModel, fullApp24)
+
+fullApp24 <- cbind(fullApp24, nextCompPred)
+
+fullApp24
+```
+
+
+
+```{r}
+ggplot(fullApp24, aes(x = lastCompPred, y = nextCompPred)) +
+  geom_point() +
+  geom_smooth(method = 'lm') +
+  xlab('2023 Completion+') +
+  ylab('2024 Completion+') +
+  ggtitle('Completion+ Predictions, 2024 Season') +
+  stat_regline_equation(label.y = 110, aes(label = after_stat(rr.label)))
+```
+
+
+
+
+
+
+# Adjust the Plus Metrics to Actual Values for 2023
+
+
+
+```{r}
+averages2023 <- data.frame(
+  PasserRating = avgPasserRating[avgPasserRating$Year == 2023,]$avgPR,
+  ANYA = avgANYA[avgANYA$Year == 2023,]$avgANYA,
+  CompletionPerc = avgComp[avgComp$Year == 2023,]$avgComp,
+  QBR = avgQBR[avgQBR$Year == 2023,]$avgQBRate,
+  YPA = avgYPA[avgYPA$Year == 2023,]$avgYPA
+)
+
+averages2023
+```
+
+
+
+```{r}
+fullApp <- fullApp |>
+  mutate(predictedRealQBR = (averages2023$QBR * lastQBRPred) / 100.0,
+         predictedRealPassRate = (averages2023$PasserRating * lastRatePred) / 100.0,
+         predictedRealANYA = (averages2023$ANYA * lastANYAPred) / 100.0,
+         predictedRealYPA = (averages2023$YPA * lastYPAPred) / 100.0,
+         predictedRealCompRate = (averages2023$CompletionPerc * lastCompPred) / 100.0
+)
+
+fullApp
+```
+
+
+
+```{r}
+fullApp24 <- fullApp24 |>
+  mutate(predictedRealQBR = (averages2023$QBR * lastQBRPred) / 100.0,
+         predictedRealPassRate = (averages2023$PasserRating * lastRatePred) / 100.0,
+         predictedRealANYA = (averages2023$ANYA * lastANYAPred) / 100.0,
+         predictedRealYPA = (averages2023$YPA * lastYPAPred) / 100.0,
+         predictedRealCompRate = (averages2023$CompletionPerc * lastCompPred) / 100.0
+)
+
+fullApp24
+```
+
+
+
+# Add Rankings to Information
+
+
+```{r}
+fullAppFinal <- fullApp |>
+  mutate(QBRPlusOP = adjustedQBR - lastQBRPred,
+         PasserRatePlusOP = adjustedRate - lastRatePred,
+         CompPlusOP = adjustedComp - lastCompPred,
+         YPAPlusOP = adjustedYPA - lastYPAPred,
+         ANYAPlusOP = adjustedANYA - lastANYAPred) |>
+  mutate(adjustedQBRRank = rank(-adjustedQBR, ties.method = 'random'),
+         lastQBRPredRank = rank(-lastQBRPred, ties.method = 'random'),
+         QBRPlusOPRank = rank(-QBRPlusOP, ties.method = 'random'),
+         adjustedPasserRateRank = rank(-adjustedRate, ties.method = 'random'),
+         lastPasserRateRank = rank(-lastRatePred, ties.method = 'random'),
+         PasserRatePlusOPRank = rank(-PasserRatePlusOP, ties.method = 'random'),
+         adjustedCompRank = rank(-adjustedComp, ties.method = 'random'),
+         lastCompRank = rank(-lastCompPred, ties.method = 'random'),
+         CompPlusOPRank = rank(-CompPlusOP, ties.method = 'random'),
+         adjustedYPARank = rank(-adjustedYPA, ties.method = 'random'),
+         lastYPARank = rank(-lastYPAPred, ties.method = 'random'),
+         YPAPlusOPRank = rank(-YPAPlusOP, ties.method = 'random'),
+         adjustedANYARank = rank(-adjustedANYA, ties.method = 'random'),
+         lastANYAPredRank = rank(-lastANYAPred, ties.method = 'random'),
+         ANYAPlusOPRank = rank(-ANYAPlusOP, ties.method = 'random')) |>
+  mutate(QBRPlusOP = case_when(
+          QBRPlusOP >= 0 ~ paste0(QBRPlusOP, '%'),
+          QBRPlusOP < 0 ~ paste0('-', QBRPlusOP, '%')
+         ),
+         PasserRatePlusOP = case_when(
+          PasserRatePlusOP >= 0 ~ paste0(PasserRatePlusOP, '%'),
+          PasserRatePlusOP < 0 ~ paste0('-', PasserRatePlusOP, '%')
+         ),
+         CompPlusOP = case_when(
+           CompPlusOP >= 0 ~ paste0(CompPlusOP, '%'),
+           CompPlusOP < 0 ~ paste0('-', CompPlusOP, '%')
+         ),
+         YPAPlusOP = case_when(
+           YPAPlusOP >= 0 ~ paste0(YPAPlusOP, '%'),
+           YPAPlusOP < 0 ~ paste0('-', YPAPlusOP, '%')
+         ),
+         ANYAPlusOP = case_when(
+           ANYAPlusOP >= 0 ~ paste0(ANYAPlusOP, '%'),
+           ANYAPlusOP < 0 ~ paste0('-', ANYAPlusOP, '%')
+         )
+  )
+
+fullAppFinal
+```
+
+
+
+
+
+```{r}
+fullApp24Final <- fullApp24 |>
+  mutate(QBRPlusOP = adjustedQBR - lastQBRPred,
+         PasserRatePlusOP = adjustedRate - lastRatePred,
+         CompPlusOP = adjustedComp - lastCompPred,
+         YPAPlusOP = adjustedYPA - lastYPAPred,
+         ANYAPlusOP = adjustedANYA - lastANYAPred) |>
+  mutate(adjustedQBRRank = rank(-adjustedQBR, ties.method = 'random'),
+         lastQBRPredRank = rank(-lastQBRPred, ties.method = 'random'),
+         QBRPlusOPRank = rank(-QBRPlusOP, ties.method = 'random'),
+         adjustedPasserRateRank = rank(-adjustedRate, ties.method = 'random'),
+         lastPasserRateRank = rank(-lastRatePred, ties.method = 'random'),
+         PasserRatePlusOPRank = rank(-PasserRatePlusOP, ties.method = 'random'),
+         adjustedCompRank = rank(-adjustedComp, ties.method = 'random'),
+         lastCompRank = rank(-lastCompPred, ties.method = 'random'),
+         CompPlusOPRank = rank(-CompPlusOP, ties.method = 'random'),
+         adjustedYPARank = rank(-adjustedYPA, ties.method = 'random'),
+         lastYPARank = rank(-lastYPAPred, ties.method = 'random'),
+         YPAPlusOPRank = rank(-YPAPlusOP, ties.method = 'random'),
+         adjustedANYARank = rank(-adjustedANYA, ties.method = 'random'),
+         lastANYAPredRank = rank(-lastANYAPred, ties.method = 'random'),
+         ANYAPlusOPRank = rank(-ANYAPlusOP, ties.method = 'random')) |>
+  mutate(QBRPlusOP = case_when(
+          QBRPlusOP >= 0 ~ paste0(QBRPlusOP, '%'),
+          QBRPlusOP < 0 ~ paste0('-', QBRPlusOP, '%')
+         ),
+         PasserRatePlusOP = case_when(
+          PasserRatePlusOP >= 0 ~ paste0(PasserRatePlusOP, '%'),
+          PasserRatePlusOP < 0 ~ paste0('-', PasserRatePlusOP, '%')
+         ),
+         CompPlusOP = case_when(
+           CompPlusOP >= 0 ~ paste0(CompPlusOP, '%'),
+           CompPlusOP < 0 ~ paste0('-', CompPlusOP, '%')
+         ),
+         YPAPlusOP = case_when(
+           YPAPlusOP >= 0 ~ paste0(YPAPlusOP, '%'),
+           YPAPlusOP < 0 ~ paste0('-', YPAPlusOP, '%')
+         ),
+         ANYAPlusOP = case_when(
+           ANYAPlusOP >= 0 ~ paste0(ANYAPlusOP, '%'),
+           ANYAPlusOP < 0 ~ paste0('-', ANYAPlusOP, '%')
+         )
+  )
+
+fullApp24Final
+```
+
+
+# Export Data
+
+
+
+```{r}
+write.csv(fullAppFinal, 'NFL QB Plus Metrics, 2023 Season.csv')
+write.csv(fullApp24Final, 'NFL QB Plus Predictions, 2024 Season.csv')
+```
+
