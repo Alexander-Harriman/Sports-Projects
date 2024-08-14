@@ -10,3 +10,5 @@ This analysis will analyze pitchers who threw 50 of a single pitch type in the 2
 
 Once the differences between levels are determined, the expected variation value will adjust each 2024 AAA pitcher's arsenal.
 The MLB-adjusted movement profile will then be compared to pitchers who pitched for the MLB club in 2024 to show who is ready for a promotion.
+
+The final AAA pitcher report can be found at this Tableau Public link: [https://public.tableau.com/app/profile/alexander.harriman4059/viz/AAAPitcherPlayerReport/AAAPitcherReport]
