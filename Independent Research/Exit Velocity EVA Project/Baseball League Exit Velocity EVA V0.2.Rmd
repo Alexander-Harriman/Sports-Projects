@@ -1,0 +1,273 @@
+---
+title: "MLB Exit Velocity EVA Analysis V0.1"
+author: "Alexander Harriman"
+date: "2024-06-06"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(dplyr)
+library(stringr)
+library(tidyr)
+library(weights)
+library(beepr)
+library(lubridate)
+library(extRemes)
+library(ismev)
+library(ggplot2)
+```
+
+
+
+This project uses Extreme Value Analysis (EVA) to determine which teams have had the highest peak power potential over the last three MLB seasons. Those figures will be compared to their affiliated AAA teams over the same timespan to determine which clubs have added the most power compared to the minor league system, along with which teams have increased the power potential of their promoted AAA players the most.
+
+
+The Peak-Over-Threshold (POT) method will be used to calculate a 1-month return level and 95% Delta and Profile-Likelihood Confidence Interval for each power calculation. The difference in return level estimates will be used to calculate the difference in power potentials.
+
+
+# Load MLB Data
+
+```{r}
+mlb24 <- read.csv('2024 Full MLB August 15.csv')
+mlb22 <- read.csv('2022 MLB Season.csv')
+mlb23 <- read.csv('2023 MLB Season.csv')
+
+
+mlbBIP <- bind_rows(mlb22, mlb23, mlb24) |>
+  filter(!details.call.description %in% c('Foul', 'Foul Tip', 'Foul Bunt') & is.na(hitData.launchSpeed) == FALSE)
+```
+
+
+
+## Blog Post Example: Tampa Bay Rays
+
+```{r}
+raysBIP <- mlbBIP |>
+  filter(batting_team == 'Tampa Bay Rays')
+```
+
+
+
+
+
+## Histogram of Exit Velocity
+
+
+```{r}
+plot(as.Date(raysBIP$game_date), raysBIP$hitData.launchSpeed,
+     xlab = "Game Date", ylab = "Exit Velocity (MPH)",
+     main = "Rays Max EV by Day, 2022-24", type = "h",
+     pch = 19, cex = 0.5, col = "lightsalmon",
+     las = 1, ylim = c(105, 120),
+     yaxt = "n")
+axis(2, at = seq(0, 120, 10), labels = seq(0, 120, 10), las = 1)
+```
+
+
+# Extract Daily Maximum Values
+
+
+```{r, warning = FALSE}
+maxEVs <- raysBIP |>
+  group_by(game_date) |>
+  summarise(bip = n(),
+            maxEV = max(hitData.launchSpeed))
+
+maxEVs <- maxEVs |>
+  mutate(maxEV = ifelse(maxEV == -Inf, 0, maxEV)) |>
+  filter(maxEV != 0) |>
+  mutate(game_date = row_number())
+```
+
+
+
+```{r}
+ggplot(maxEVs, aes(x = game_date, y = maxEV)) +
+  geom_line(color = '#8fbce6') +
+  geom_point(color = '#092c5c', shape = 'diamond') +
+  xlab('Game Number') +
+  ylab('Exit Velocity (MPH)') +
+  ggtitle('Rays Max EV on Balls in Play per Game, 2022-24') +
+  theme(axis.title.y = element_text(margin = margin(r = 10), color = 'firebrick', face = 'bold', size = 14),
+        axis.title.x = element_text(margin = margin(t = 10), face = 'bold', size = 14),
+        axis.text.x = element_text(angle = 20, face = 'bold'),
+        plot.title = element_text(hjust = 0.5, size = 18, face = 'bold'))
+```
+
+
+
+
+# EVA: Peak-Over-Threshold Method
+
+
+## Find the Best Threshold: Mean Residual Life Plot
+
+Choosing a quality threshold is up to the analyst. A Mean Residual Life Plot (MRL plot) is used as a visual guide: the threshold is placed where the plot begins to flatten into a horizontal line. 
+
+```{r}
+mrlplot(maxEVs$maxEV, main = 'Mean Residual Exit Velocity', xlab = 'Exit Velocity (MPH)', las = 1, xlim = c(105, 115), ylim = c(0, 5))
+
+abline(v = 110, col = "blue", lty = 2)
+
+threshold <- 110
+```
+
+
+Using this curve, the mean excess plot begins to flatten out around 110 MPH. Therefore, that will be the threshold set for this analysis.
+
+
+## Plot the Time Series
+
+
+
+```{r}
+plotEVs <- maxEVs |>
+  filter(maxEV > 110)
+ggplot(plotEVs, aes(x = game_date, y = maxEV)) +
+  geom_line(color = '#8fbce6') +
+  geom_point(color = '#092c5c', shape = 'diamond') +
+  xlab('Game Number') +
+  ylab('Exit Velocity (MPH)') +
+  ggtitle('Rays Peaks Over Threshold, 2022-24') +
+  theme(axis.title.y = element_text(margin = margin(r = 10), color = 'firebrick', face = 'bold', size = 14),
+        axis.title.x = element_text(margin = margin(t = 10), face = 'bold', size = 14),
+        axis.text.x = element_text(angle = 20, face = 'bold'),
+        plot.title = element_text(hjust = 0.5, size = 18, face = 'bold')) +
+  geom_hline(yintercept = 110, linewidth = 1, color = 'black', linetype = 'dashed') +
+  annotate(geom = 'text', label = paste0('# Peaks: ', dim(plotEVs)[1]), x = 50, y = 116, fontface = 'bold')
+```
+
+
+
+# Find High-EV Balls in Play
+
+
+```{r}
+highEV <- which(maxEVs$maxEV > threshold)
+extremEV <- maxEVs[highEV,]
+length(highEV)
+```
+
+
+
+
+
+
+## Assess Best Fit
+
+
+
+```{r}
+#Fit the GPD
+gpdFit <- fevd(c(maxEVs$maxEV), threshold = threshold, type = 'GP')
+
+gpdFit
+
+
+MLE <- gpdFit$results$par
+
+##QQ-Plot
+p <- 1:length(extremEV$maxEV) / (length(extremEV$maxEV) + 1)
+qm <- gpdq(MLE, 110, 1 - p)
+
+
+
+plot(qm, sort(extremEV$maxEV),
+     pch = 16, cex = 1, col = alpha("blue", 0.5),
+     xlab = "Model", ylab = "Empirical", main = "Quantile Plot",
+     las = 1)
+abline(0, 1, lwd = 1.5)
+```
+
+
+
+
+## Perform Inference on Return Levels
+
+
+
+```{r}
+#Find 1-week, 1-month, and 1-season return levels
+
+##Using 7 days, 30 days, and 180 days
+returnLevels <- return.level(gpdFit, return.period = c(7, 30, 180))
+
+returnLevels
+```
+
+
+
+### Confidence Intervals
+
+
+The 1-Month Confidence Interval will be used for these graphs.
+
+```{r}
+#1-Month Return Level
+returnLevel <- return.level(gpdFit, return.period = 30)
+
+#Delta CI
+
+deltaCI <- ci(gpdFit, return.period = 30, verbose = F)
+deltaCI
+
+
+#Profile-Likelihood CI
+
+profCI <- ci(gpdFit, method = 'proflik', xrange = c(115, 130), return.period = 30, verbose = F)
+profCI
+
+
+# Plot CIs
+
+hist(extremEV$maxEV, col = alpha("lightblue", 0.2), border = "gray",
+     xlim = c(110, 125), ylim = c(0, 75),
+     xlab = "Exit Velocity (MPH)",
+     main = "White Sox 1-Month Expected Maximum EV")
+xg <- seq(threshold, 10, len = 1000)
+mle <- gpdFit$results$par
+lines(xg, gpd.dens(mle, threshold, xg), lwd = 1.5)
+abline(v = returnLevel, lwd = 1.5, lty = 2)
+for (i in c(1, 3)) abline(v = deltaCI[i], lty = 2, col = "blue")
+for (i in c(1,3)) abline(v = profCI[i], lty = 2, col = "red")
+legend("topleft", legend = c("Delta CI", "Prof CI"),
+       col = c("blue", "red"), lty = c(2, 3), bty = "n",
+       lwd = 1.5)
+```
+
+
+
+
+
+
+### Load AAA Data
+
+
+Next, every team's AAA affiliate will be analyzed over the same 2022-2024 season timespan.
+
+
+```{r}
+aaa24 <- read.csv('2024 Full MiLB August 15.csv') |>
+  filter(home_league_name == 'AAA')
+
+aaa23 <- read.csv('2023 AAA Season.csv')
+
+filesMI2022 <- list.files(path = '.', pattern = '2022 MiLB Season')
+
+dataList2022 <- map(filesMI2022, read.csv)
+
+aaa22 <- rbindlist(dataList2022, fill = TRUE) |>
+  filter(home_league_name == 'AAA')
+
+
+aaaBIP <- bind_rows(aaa22, aaa23, aaa24) |>
+  filter(!details.call.description %in% c('Foul', 'Foul Tip', 'Foul Bunt') & is.na(hitData.launchSpeed) == FALSE)
+```
+
+
+
