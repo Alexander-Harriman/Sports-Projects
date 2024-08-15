@@ -1,0 +1,195 @@
+---
+title: "MLB Exit Velocity EVA Analysis V0.1"
+author: "Alexander Harriman"
+date: "2024-06-06"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(dplyr)
+library(stringr)
+library(tidyr)
+library(weights)
+library(beepr)
+library(lubridate)
+library(extRemes)
+library(ismev)
+```
+
+
+
+# Load MLB Data
+
+```{r}
+mlb24 <- read.csv('2024 Full MLB August 12.csv')
+mlb22 <- read.csv('2022 MLB Season.csv')
+mlb23 <- read.csv('2023 MLB Season.csv')
+
+
+mlbBIP <- bind_rows(mlb24, mlb22, mlb23) |>
+  filter(!details.call.description %in% c('Foul', 'Foul Tip', 'Foul Bunt') & is.na(hitData.launchSpeed) == FALSE)
+```
+
+
+
+
+
+
+
+## Histogram of Exit Velocity
+
+```{r}
+plot(mlbBIP$hitData.launchSpeed~as.Date(mlbBIP$game_date),
+     xlab = "Game Date", ylab = "Exit Velocity (MPH)",
+     main = "2024 MLB Ball In Play EVs", type = "h",
+     pch = 19, cex = 0.5, col = "lightsalmon",
+     las = 1,
+     yaxt = "n")
+axis(2, at = seq(0, 120, 10), labels = seq(0, 120, 10), las = 1)
+```
+
+
+# Extract Daily Maximum Values
+
+
+```{r, warning = FALSE}
+maxEVs <- mlbBIP |>
+  group_by(game_date) |>
+  summarise(bip = n(),
+            maxEV = max(hitData.launchSpeed))
+
+maxEVs <- maxEVs |>
+  mutate(maxEV = ifelse(maxEV == -Inf, 0, maxEV)) |>
+  filter(maxEV != 0) |>
+  mutate(game_date = row_number())
+```
+
+
+
+# EVA: Peak-Over-Threshold Method
+
+
+## Find the Best Threshold: Mean Residual Life Plot
+
+Choosing a quality threshold is up to the analyst. A Mean Residual Life Plot (MRL plot) is used as a visual guide: the threshold is placed where the plot begins to flatten into a horizontal line. 
+
+```{r}
+mrlplot(maxEVs$maxEV, main = 'Mean Residual Exit Velocity', xlab = 'Exit Velocity (MPH)', las = 1, xlim = c(110, 120), ylim = c(0, 5))
+
+abline(v = 115, col = "blue", lty = 2)
+
+threshold <- 115
+```
+
+
+Using this curve, the mean excess plot begins to flatten out around 115 MPH. Therefore, that will be the threshold set for this analysis.
+
+
+## Plot the Time Series
+
+FILL IN BEFORE THE END
+
+
+
+# Find High-EV Balls in Play
+
+
+```{r}
+highEV <- which(maxEVs$maxEV > threshold)
+extremEV <- maxEVs[highEV,]
+length(highEV)
+```
+
+
+
+
+
+
+## Assess Best Fit
+
+
+
+```{r}
+#Fit the GPD
+gpdFit <- fevd(c(maxEVs$maxEV), threshold = threshold, type = 'GP')
+
+gpdFit
+
+
+MLE <- gpdFit$results$par
+
+##QQ-Plot
+p <- 1:length(extremEV$maxEV) / (length(extremEV$maxEV) + 1)
+qm <- gpdq(MLE, 115, 1 - p)
+
+
+
+plot(qm, sort(extremEV$maxEV),
+     pch = 16, cex = 1, col = alpha("blue", 0.5),
+     xlab = "Model", ylab = "Empirical", main = "Quantile Plot",
+     las = 1)
+abline(0, 1, lwd = 1.5)
+```
+
+
+
+
+## Perform Inference on Return Levels
+
+
+
+```{r}
+#Find 1-week, 1-month, and 1-season return levels
+
+##Using 7 days, 30 days, and 180 days
+returnLevels <- return.level(gpdFit, return.period = c(7, 30, 180))
+
+returnLevels
+```
+
+
+
+### Confidence Intervals
+
+
+The 1-Month Confidence Interval will be used for these graphs.
+
+```{r}
+#1-Month Return Level
+returnLevel <- return.level(gpdFit, return.period = 30)
+
+#Delta CI
+
+deltaCI <- ci(gpdFit, return.period = 30, verbose = F)
+deltaCI
+
+
+#Profile-Likelihood CI
+
+profCI <- ci(gpdFit, method = 'proflik', xrange = c(115, 130), return.period = 30, verbose = F)
+profCI
+
+
+# Plot CIs
+
+hist(extremEV$maxEV, col = alpha("lightblue", 0.2), border = "gray",
+     xlim = c(115, 130), ylim = c(0, 120),
+     xlab = "Exit Velocity (MPH)",
+     main = "95% CI for 1-Month Maximum EV on Balls in Play")
+xg <- seq(threshold, 10, len = 1000)
+mle <- gpdFit$results$par
+lines(xg, gpd.dens(mle, threshold, xg), lwd = 1.5)
+abline(v = returnLevel, lwd = 1.5, lty = 2)
+for (i in c(1, 3)) abline(v = deltaCI[i], lty = 2, col = "blue")
+for (i in c(1,3)) abline(v = profCI[i], lty = 2, col = "red")
+legend("topleft", legend = c("Delta CI", "Prof CI"),
+       col = c("blue", "red"), lty = c(2, 3), bty = "n",
+       lwd = 1.5)
+```
+
+
